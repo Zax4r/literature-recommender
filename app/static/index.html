@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Литература</title>
+<link rel="icon" href="data:,">
+<style>
+  :root { --bg:#faf8f5; --card:#fff; --text:#222; --muted:#777; --accent:#8a3b12; --line:#e6e0d8; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#181614; --card:#221f1c; --text:#eee; --muted:#9a948c; --accent:#e0905a; --line:#38332d; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font:16px/1.5 system-ui, sans-serif; background:var(--bg); color:var(--text); }
+  header { display:flex; flex-wrap:wrap; gap:12px; align-items:center; padding:12px 16px; border-bottom:1px solid var(--line); }
+  header h1 { font-size:18px; margin:0 auto 0 0; }
+  main { max-width:900px; margin:0 auto; padding:16px; }
+  button { font:inherit; padding:6px 12px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--text); cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button:disabled { opacity:.4; cursor:default; }
+  input { font:inherit; padding:8px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--text); width:100%; }
+  .tabs button.active { border-color:var(--accent); color:var(--accent); }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:14px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; overflow:hidden; cursor:pointer; position:relative; }
+  .card img { width:100%; aspect-ratio:2/3; object-fit:cover; display:block; background:var(--line); }
+  .card .meta { padding:8px; }
+  .card .title { font-weight:600; font-size:14px; }
+  .muted { color:var(--muted); font-size:13px; }
+  .heart { position:absolute; top:6px; right:6px; background:var(--card); border-radius:50%; width:32px; height:32px; padding:0; }
+  .heart.on { color:#d33; }
+  .pager { display:flex; gap:12px; align-items:center; justify-content:center; margin:20px 0; }
+  dialog { border:1px solid var(--line); border-radius:10px; background:var(--card); color:var(--text); max-width:520px; width:92%; }
+  dialog::backdrop { background:rgba(0,0,0,.5); }
+  dialog img { float:left; width:110px; margin:0 14px 8px 0; border-radius:4px; }
+  .form { display:grid; gap:10px; max-width:340px; margin:40px auto; }
+  .error { color:#d33; min-height:1.4em; }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1>📚 Литература</h1>
+  <nav class="tabs" id="tabs" hidden>
+    <button data-tab="feed" class="active">Лента</button>
+    <button data-tab="favorites">Избранное</button>
+  </nav>
+  <button id="importBtn" hidden>Импорт 100 книг</button>
+  <span id="who" class="muted"></span>
+  <button id="authBtn">Войти</button>
+</header>
+
+<main>
+  <section id="authForm" class="form" hidden>
+    <input id="login" placeholder="Логин или email" autocomplete="username">
+    <input id="email" type="email" placeholder="Email (для регистрации)" autocomplete="email">
+    <input id="password" type="password" placeholder="Пароль (от 8 символов для регистрации)" autocomplete="current-password">
+    <div class="error" id="authError"></div>
+    <button class="primary" id="loginBtn">Войти</button>
+    <button id="registerBtn">Зарегистрироваться (логин = username)</button>
+  </section>
+
+  <section id="list">
+    <div class="muted" id="status"></div>
+    <div class="grid" id="grid"></div>
+    <div class="pager">
+      <button id="prev">← Назад</button>
+      <span id="pageInfo" class="muted"></span>
+      <button id="next">Вперёд →</button>
+    </div>
+  </section>
+</main>
+
+<dialog id="dialog"></dialog>
+
+<script>
+const API = "/api/v1";
+const LIMIT = 12;
+const $ = (id) => document.getElementById(id);
+const state = { token: localStorage.getItem("token"), me: null, tab: "feed", offset: 0, total: 0 };
+
+async function api(path, { method = "GET", body, form } = {}) {
+  const headers = {};
+  if (state.token) headers.Authorization = `Bearer ${state.token}`;
+  let payload;
+  if (form) payload = new URLSearchParams(form);
+  else if (body) { headers["Content-Type"] = "application/json"; payload = JSON.stringify(body); }
+  const res = await fetch(API + path, { method, headers, body: payload });
+  if (res.status === 401 && state.token) { logout(); }
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    const detail = Array.isArray(err.detail) ? err.detail.map((d) => d.msg).join("; ") : err.detail;
+    throw new Error(detail || res.statusText);
+  }
+  return res.status === 204 ? null : res.json();
+}
+
+function logout() {
+  state.token = null; state.me = null; state.tab = "feed"; state.offset = 0;
+  localStorage.removeItem("token");
+  render();
+}
+
+async function loadMe() {
+  state.me = state.token ? await api("/users/me").catch(() => null) : null;
+}
+
+async function render() {
+  const authed = !!state.me;
+  $("tabs").hidden = !authed;
+  $("importBtn").hidden = !(state.me && state.me.is_admin);
+  $("who").textContent = authed ? state.me.username : "";
+  $("authBtn").textContent = authed ? "Выйти" : "Войти";
+  document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === state.tab));
+  $("authForm").hidden = true;
+  $("list").hidden = false;
+  await loadBooks();
+}
+
+async function loadBooks() {
+  const path = state.tab === "favorites" ? "/users/me/favorites" : "/books";
+  try {
+    const page = await api(`${path}?offset=${state.offset}&limit=${LIMIT}`);
+    state.total = page.total;
+    $("status").textContent = page.total ? "" : (state.tab === "favorites" ? "В избранном пока пусто." : "Книг нет. Войдите как admin и нажмите «Импорт».");
+    $("grid").replaceChildren(...page.items.map(card));
+    const from = page.total ? state.offset + 1 : 0;
+    $("pageInfo").textContent = `${from}–${state.offset + page.items.length} из ${page.total}`;
+    $("prev").disabled = state.offset === 0;
+    $("next").disabled = state.offset + LIMIT >= page.total;
+  } catch (e) { $("status").textContent = e.message; }
+}
+
+function el(tag, props = {}, ...kids) {
+  const node = Object.assign(document.createElement(tag), props);
+  node.append(...kids);
+  return node;
+}
+
+function heart(book, onChange) {
+  if (!state.me) return null;
+  const btn = el("button", { className: "heart" + (book.is_favorite ? " on" : ""), title: "В избранное" }, book.is_favorite ? "♥" : "♡");
+  btn.onclick = async (ev) => {
+    ev.stopPropagation();
+    await api(`/books/${book.id}/favorite`, { method: book.is_favorite ? "DELETE" : "PUT" });
+    book.is_favorite = !book.is_favorite;
+    onChange();
+  };
+  return btn;
+}
+
+function card(book) {
+  const node = el("div", { className: "card", onclick: () => openBook(book.id) });
+  const rebuild = () => { if (state.tab === "favorites") loadBooks(); else node.replaceWith(card(book)); };
+  node.append(
+    el("img", { src: book.image_url || "", loading: "lazy", alt: "" }),
+    el("div", { className: "meta" }, el("div", { className: "title" }, book.title), el("div", { className: "muted" }, book.authors.join(", "))),
+  );
+  const h = heart(book, rebuild);
+  if (h) node.append(h);
+  return node;
+}
+
+async function openBook(id) {
+  const book = await api(`/books/${id}`);
+  const dlg = $("dialog");
+  const body = el("div", {},
+    el("img", { src: book.image_url || "", alt: "" }),
+    el("h2", {}, book.title),
+    el("div", { className: "muted" }, book.authors.join(", ")),
+    el("p", {}, book.description.length >= 250 ? book.description + "…" : book.description),
+    book.url ? el("a", { href: book.url, target: "_blank", rel: "noopener" }, "Goodreads") : "",
+  );
+  const actions = el("div", { style: "clear:both; display:flex; gap:8px; margin-top:12px" });
+  const fav = state.me && el("button", {}, book.is_favorite ? "♥ Убрать из избранного" : "♡ В избранное");
+  if (fav) {
+    fav.onclick = async () => {
+      await api(`/books/${id}/favorite`, { method: book.is_favorite ? "DELETE" : "PUT" });
+      dlg.close(); loadBooks();
+    };
+    actions.append(fav);
+  }
+  actions.append(el("button", { onclick: () => dlg.close() }, "Закрыть"));
+  dlg.replaceChildren(body, actions);
+  dlg.showModal();
+}
+
+async function submitAuth(register) {
+  $("authError").textContent = "";
+  try {
+    const login = $("login").value.trim(), password = $("password").value;
+    if (register) {
+      await api("/auth/register", { method: "POST", body: { email: $("email").value.trim(), username: login, password } });
+    }
+    const t = await api("/auth/login", { method: "POST", form: { username: login, password } });
+    state.token = t.access_token;
+    localStorage.setItem("token", state.token);
+    await loadMe();
+    state.offset = 0;
+    render();
+  } catch (e) { $("authError").textContent = e.message; }
+}
+
+$("authBtn").onclick = () => {
+  if (state.me) return logout();
+  $("authForm").hidden = false; $("list").hidden = true;
+};
+$("loginBtn").onclick = () => submitAuth(false);
+$("registerBtn").onclick = () => submitAuth(true);
+$("prev").onclick = () => { state.offset = Math.max(0, state.offset - LIMIT); loadBooks(); };
+$("next").onclick = () => { state.offset += LIMIT; loadBooks(); };
+document.querySelectorAll("#tabs button").forEach((b) => b.onclick = () => { state.tab = b.dataset.tab; state.offset = 0; render(); });
+$("importBtn").onclick = async () => {
+  $("importBtn").disabled = true; $("status").textContent = "Импорт, подождите…";
+  try {
+    const r = await api("/books/import?count=100", { method: "POST" });
+    $("status").textContent = `Добавлено: ${r.imported}, уже были: ${r.skipped}`;
+    state.offset = 0; await loadBooks();
+  } catch (e) { $("status").textContent = e.message; }
+  $("importBtn").disabled = false;
+};
+
+loadMe().then(render);
+</script>
+</body>
+</html>
