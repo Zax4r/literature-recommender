@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://postgres:postgres@localhost:5432/literature"
     secret_key: str = "dev-only-secret-change-me-in-production"
     access_token_expire_minutes: int = 60 * 24
+    store_search_url: str = "https://oz.by/search/?q={query}"
 
 
 settings = Settings()

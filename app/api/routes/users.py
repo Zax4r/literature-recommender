@@ -2,10 +2,11 @@ from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import func, select
 
 from app.api.deps import CurrentUser, DbSession
-from app.api.routes.books import Limit, Offset, to_list_item, to_page
-from app.models import Book, Favorite, User
-from app.schemas.book import BookPage
+from app.api.routes.books import Limit, Offset
+from app.models import Book, Favorite, User, UserBook
+from app.schemas.book import BookPage, Status
 from app.schemas.user import UserMe, UserPublic, UserUpdate
+from app.services.books import to_list_items
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -30,15 +31,42 @@ def read_my_favorites(
 ) -> BookPage:
     owned = Favorite.user_id == user.id
     total = db.scalar(select(func.count()).select_from(Favorite).where(owned)) or 0
-    books = db.scalars(
-        select(Book)
-        .join(Favorite, Favorite.book_id == Book.id)
-        .where(owned)
-        .order_by(Book.id)
-        .offset(offset)
-        .limit(limit)
-    ).all()
-    return to_page([to_list_item(b, {b.id for b in books}) for b in books], total, offset, limit)
+    books = list(
+        db.scalars(
+            select(Book)
+            .join(Favorite, Favorite.book_id == Book.id)
+            .where(owned)
+            .order_by(Book.id)
+            .offset(offset)
+            .limit(limit)
+        )
+    )
+    return BookPage(items=to_list_items(db, user, books), total=total, offset=offset, limit=limit)
+
+
+@router.get("/me/library", response_model=BookPage)
+def read_my_library(
+    user: CurrentUser,
+    db: DbSession,
+    status: Status | None = None,
+    offset: Offset = 0,
+    limit: Limit = 20,
+) -> BookPage:
+    conditions = [UserBook.user_id == user.id]
+    if status is not None:
+        conditions.append(UserBook.status == status)
+    total = db.scalar(select(func.count()).select_from(UserBook).where(*conditions)) or 0
+    books = list(
+        db.scalars(
+            select(Book)
+            .join(UserBook, UserBook.book_id == Book.id)
+            .where(*conditions)
+            .order_by(UserBook.updated_at.desc(), Book.id)
+            .offset(offset)
+            .limit(limit)
+        )
+    )
+    return BookPage(items=to_list_items(db, user, books), total=total, offset=offset, limit=limit)
 
 
 @router.get("/{username}", response_model=UserPublic)

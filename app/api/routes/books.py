@@ -2,12 +2,12 @@ from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, Response, status
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
 
 from app.api.deps import AdminUser, CurrentUser, DbSession, OptionalUser
-from app.models import Author, Book, Favorite, User
-from app.schemas.book import BookDetail, BookListItem, BookPage, ImportResult
+from app.models import Author, Book, BookTag, Favorite, Tag
+from app.schemas.book import BookDetail, BookPage, ImportResult
 from app.services import ucsd
+from app.services.books import book_tags, get_book_or_404, store_url, to_list_items
 
 router = APIRouter(prefix="/books", tags=["books"])
 
@@ -17,47 +17,13 @@ Offset = Annotated[int, Query(ge=0)]
 Limit = Annotated[int, Query(ge=1, le=100)]
 
 
-def get_book_or_404(db: Session, book_id: int) -> Book:
-    book = db.get(Book, book_id)
-    if book is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Book not found")
-    return book
-
-
-def favorite_ids(db: Session, user: User | None, books: list[Book]) -> set[int]:
-    if user is None or not books:
-        return set()
-    return set(
-        db.scalars(
-            select(Favorite.book_id).where(
-                Favorite.user_id == user.id, Favorite.book_id.in_([b.id for b in books])
-            )
-        )
-    )
-
-
-def to_list_item(book: Book, favorites: set[int]) -> BookListItem:
-    return BookListItem(
-        id=book.id,
-        title=book.title,
-        authors=[a.name for a in book.authors],
-        image_url=book.image_url,
-        is_favorite=book.id in favorites,
-    )
-
-
-def to_page(items: list[BookListItem], total: int, offset: int, limit: int) -> BookPage:
-    return BookPage(items=items, total=total, offset=offset, limit=limit)
-
-
 @router.get("", response_model=BookPage)
 def list_books(
     db: DbSession, user: OptionalUser, offset: Offset = 0, limit: Limit = 20
 ) -> BookPage:
     total = db.scalar(select(func.count()).select_from(Book)) or 0
     books = list(db.scalars(select(Book).order_by(Book.id).offset(offset).limit(limit)))
-    favorites = favorite_ids(db, user, books)
-    return to_page([to_list_item(b, favorites) for b in books], total, offset, limit)
+    return BookPage(items=to_list_items(db, user, books), total=total, offset=offset, limit=limit)
 
 
 @router.post("/import", response_model=ImportResult)
@@ -89,9 +55,14 @@ def import_books(
         if goodreads_id not in authors:
             authors[goodreads_id] = Author(goodreads_id=goodreads_id, name=name)
 
+    tag_names = {name for r in records for name, _count in r.shelves}
+    tags = {t.name: t for t in db.scalars(select(Tag).where(Tag.name.in_(tag_names)))}
+    for name in tag_names - tags.keys():
+        tags[name] = Tag(name=name)
+
     new = [r for r in records if r.goodreads_id not in known]
-    db.add_all(
-        Book(
+    for r in new:
+        book = Book(
             goodreads_id=r.goodreads_id,
             title=r.title,
             description=r.description,
@@ -99,8 +70,8 @@ def import_books(
             url=r.url,
             authors=[authors[a] for a in r.author_ids if a in authors],
         )
-        for r in new
-    )
+        db.add(book)
+        db.add_all(BookTag(book=book, tag=tags[name], weight=count) for name, count in r.shelves)
     db.commit()
     return ImportResult(imported=len(new), skipped=len(records) - len(new))
 
@@ -108,11 +79,13 @@ def import_books(
 @router.get("/{book_id}", response_model=BookDetail)
 def read_book(book_id: int, db: DbSession, user: OptionalUser) -> BookDetail:
     book = get_book_or_404(db, book_id)
-    item = to_list_item(book, favorite_ids(db, user, [book]))
+    item = to_list_items(db, user, [book])[0]
     return BookDetail(
         **item.model_dump(),
         description=book.description[:DESCRIPTION_PREVIEW_CHARS],
         url=book.url,
+        store_url=store_url(book),
+        tags=book_tags(db, book.id, user),
     )
 
 

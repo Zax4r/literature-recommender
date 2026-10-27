@@ -1,52 +1,8 @@
 import json
-from collections.abc import Iterator
 
-import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import update
-from sqlalchemy.orm import Session, sessionmaker
 
-from app.models import User
-from app.services import ucsd
-from app.services.ucsd import BookRecord, parse_record
-
-
-def fake_books(limit: int) -> Iterator[BookRecord]:
-    for i in range(1, min(limit, 30) + 1):
-        yield BookRecord(
-            str(i), f"Book {i}", "x" * 400, None, f"https://example.com/{i}", (str(i % 3),)
-        )
-
-
-def fake_author_names(author_ids: set[str]) -> dict[str, str]:
-    return {a: f"Author {a}" for a in author_ids}
-
-
-@pytest.fixture
-def auth(client: TestClient) -> dict[str, str]:
-    client.post(
-        "/api/v1/auth/register",
-        json={"email": "a@b.com", "username": "alice", "password": "password123"},
-    )
-    token = client.post(
-        "/api/v1/auth/login", data={"username": "a@b.com", "password": "password123"}
-    ).json()["access_token"]
-    return {"Authorization": f"Bearer {token}"}
-
-
-@pytest.fixture
-def admin(auth: dict[str, str], session_factory: sessionmaker[Session]) -> dict[str, str]:
-    with session_factory() as session:
-        session.execute(update(User).values(is_admin=True))
-        session.commit()
-    return auth
-
-
-@pytest.fixture
-def imported(client: TestClient, admin: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(ucsd, "fetch_books", fake_books)
-    monkeypatch.setattr(ucsd, "fetch_author_names", fake_author_names)
-    assert client.post("/api/v1/books/import?count=25", headers=admin).status_code == 200
+from app.services.ucsd import parse_record, topic_shelves
 
 
 def test_parse_record_cleans_html_and_skips_unusable() -> None:
@@ -116,3 +72,15 @@ def test_login_by_username(client: TestClient, auth: dict[str, str]) -> None:
         "/api/v1/auth/login", data={"username": "alice", "password": "password123"}
     )
     assert response.status_code == 200
+
+
+def test_topic_shelves_drops_reader_state_noise_and_rare_shelves() -> None:
+    shelves = [
+        {"name": "to-read", "count": "900"},
+        {"name": "read-2015", "count": "50"},
+        {"name": "fantasy", "count": "40"},
+        {"name": "found-family", "count": "12"},
+        {"name": "once", "count": "1"},
+        {"name": "shelfari-favorites", "count": "30"},
+    ]
+    assert topic_shelves(shelves) == (("fantasy", 40), ("found-family", 12))
