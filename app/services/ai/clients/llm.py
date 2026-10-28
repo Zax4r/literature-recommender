@@ -17,7 +17,8 @@ llm_client = AsyncOpenAI(
 
 DEFAULT_CHAT_MODEL = settings.EXTRACTOR_MODEL
 
-# Коды, после которых имеет смысл повторить запрос.
+# Коды, после которых имеет смысл повторить запрос (см. exception.status_code).
+# Зависания/таймауты НЕ ретраим — иначе один сбой съедает все 60+ секунд.
 _RETRYABLE_CODES = {429, 500, 502, 503, 504}
 
 
@@ -28,13 +29,11 @@ async def chat_completion(
     *,
     json_mode: bool = False,
     temperature: float = 0.2,
-    max_retries: int = 3,
+    max_retries: int | None = None,
 ) -> str:
-    """Один вызов chat/completions с ретраями на rate-limit/сбои провайдера.
-
-    В json_mode просим структурированный JSON. OpenRouter разрешает фолбэк на
-    другой провайдер той же модели (provider.allow_fallbacks).
-    """
+    """Один вызов chat/completions с ограниченными ретраями (по умолчанию 2)."""
+    if max_retries is None:
+        max_retries = settings.LLM_MAX_RETRIES
     kwargs: dict = {
         "model": model,
         "messages": [
@@ -55,7 +54,7 @@ async def chat_completion(
         except Exception as exc:  # noqa: BLE001
             last_exc = exc
             code = getattr(exc, "status_code", None)
-            retryable = code in _RETRYABLE_CODES or code is None
+            retryable = code in _RETRYABLE_CODES
             if attempt < max_retries - 1 and retryable:
                 await asyncio.sleep(1.0 * (attempt + 1))
                 continue

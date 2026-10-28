@@ -16,9 +16,11 @@ class Settings(BaseSettings):
 
     # --- LLM (OpenRouter; модели настраиваются через env) ---
     OPENROUTER_API_KEY: str = ""
-    ROUTER_MODEL: str = "inclusionai/ling-3.1-flash"
-    EXTRACTOR_MODEL: str = "inclusionai/ling-3.1-flash"
-    FORMATTER_MODEL: str = "inclusionai/ling-3.1-flash"
+    # ling-3.1-flash был очень медленным на реальных промптах (10-18с+ на вызов);
+    # gpt-4o-mini ~2-3с и стабильно отдаёт JSON. Переопределяется через env.
+    ROUTER_MODEL: str = "openai/gpt-4o-mini"
+    EXTRACTOR_MODEL: str = "openai/gpt-4o-mini"
+    FORMATTER_MODEL: str = "openai/gpt-4o-mini"
     # Модель для web-поиска через OpenRouter Responses API (plugins: web)
     SHOP_SEARCH_WEB_MODEL: str = "openai/gpt-4o-mini"
     # Фолбэк для web-поиска: модель с суффиксом :online (chat completions)
@@ -26,6 +28,15 @@ class Settings(BaseSettings):
     # false: без платного web-поиска, ссылки-шаблоны на поиск в магазинах
     SHOP_SEARCH_ENABLED: bool = True
     LLM_TIMEOUT_SECONDS: float = 60.0
+    # <- retry только по явным ошибкам провайдера (429/5xx), не по зависаниям
+    LLM_MAX_RETRIES: int = 2
+
+    # --- Скорость / таймауты этапов чата ---
+    AGENT_TIMEOUT_SECONDS: float = 15.0  # роутер/экстрактор/форматер
+    SEARCH_TIMEOUT_SECONDS: float = 20.0  # эмбеддинг + гибридный поиск
+    SHOP_MAX_BOOKS: int = 3  # столько книг ищутся в магазинах (web-поиск дорогой)
+    SHOP_SEARCH_MAX_RESULTS: int = 3
+    SHOP_TIMEOUT_SECONDS: float = 15.0
 
     # --- Qdrant (гибридный поиск: dense + sparse BM25) ---
     QDRANT_COLLECTION: str = "books_collection"
