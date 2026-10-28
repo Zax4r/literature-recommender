@@ -1,0 +1,22 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Tooling
+.pytest_cache/
+.coverage
+.mypy_cache/
+
+# Runtime storage
+storage/temp_upload/
+storage/temp_audio/
+storage/temp_snippets/
+storage/temp_storage/
+
+# Generated/large data (regenerable by the pipeline)
+scripts/data/3_embeddings/
