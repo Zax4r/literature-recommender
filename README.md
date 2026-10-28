@@ -9,7 +9,8 @@
 
 | Часть | Что делает |
 |---|---|
-| **Бэкенд** (FastAPI + PostgreSQL) | Аккаунты (JWT), каталог, избранное, библиотека с оценками, теги с голосованием, история рекомендаций, веб-интерфейс |
+| **Бэкенд** (FastAPI + PostgreSQL) | Аккаунты (JWT), каталог, избранное, библиотека с оценками, теги с голосованием, история рекомендаций, сохраняемые сессии чата |
+| **Фронтенд** (`frontend/`, React + Vite + TypeScript) | Отдельное приложение за nginx: вход и регистрация, лента, избранное, библиотека, теги, история рекомендаций и чат с сохранением сессий |
 | **AI-чат** | Агенты (роутер → экстрактор → гибридный поиск в Qdrant → поиск магазинов → форматтер), локальное распознавание речи (faster-whisper), защита от prompt injection. Эндпоинт `POST /api/v1/chat` |
 
 Связь между частями: у каждой книги есть `source_idx`, он хранится и в Qdrant, и в Postgres (`books.source_idx`).
@@ -35,7 +36,8 @@ docker compose up --build
 
 Дальше:
 
-- Веб-интерфейс: http://localhost:8000/ (регистрация, лента, избранное, библиотека, чат).
+- Веб-интерфейс (контейнер `frontend`, nginx проксирует `/api` на бэкенд): http://localhost:3000/
+- API без интерфейса: http://localhost:8000/
 - Swagger: http://localhost:8000/docs
 - Готовый админ из миграции: `admin` / `admin`.
 
@@ -60,6 +62,16 @@ SHOP_SEARCH_ENABLED=false
 - Бесплатные модели нестабильны: проверенные нами Gemma `:free` отвечали 429 (общий лимит провайдера), а nemotron
   работал. Модель меняется переменными окружения без правки кода.
 - Если `.env` не задан, чат не сможет отвечать (нет ключа), остальные функции работают.
+
+### Фронтенд в разработке
+
+Node на хосте не нужен: зависимости ставятся локально в `frontend/node_modules`.
+
+```bash
+cd frontend && npm install
+npm run dev      # http://localhost:5173, /api проксируется на localhost:8000
+npm run check    # проверка типов (tsc)
+```
 
 ### Локальная разработка (без контейнера для API)
 
@@ -114,6 +126,9 @@ uv run uvicorn app.main:app --reload
 | POST | `/books/{id}/tags` | токен | предложить тег `{"name"}`, он получает ваш голос «за» |
 | PUT / DELETE | `/books/{id}/tags/{tag_id}/vote` | токен | голос `{"value": 1\|-1}` или его удаление, один голос на пользователя |
 | POST | `/chat` | все | multipart: `message`, `file` (текст или аудио), `history`; с токеном исключает прочитанное и сохраняет историю |
+| GET / POST | `/chat/sessions` | токен | сохранённые сессии чата: список и создание |
+| GET / PATCH / DELETE | `/chat/sessions/{id}` | токен | история сессии, переименование, удаление |
+| POST | `/chat/sessions/{id}/messages` | токен | multipart: `message`, `file`; ответ приходит потоком `text/event-stream` (`user`, `message`, `error`), книги попадают в историю рекомендаций |
 | POST | `/chat/transcribe` | все | отладка: только распознавание речи |
 | GET | `/recommendations`, `/recommendations/{id}` | токен | история чата: запрос, ответ, книги, ссылки магазинов |
 
@@ -139,9 +154,10 @@ app/
   core/           настройки (одна Settings на всё приложение) и безопасность
   db/, models/, schemas/
   services/       books, history, tag_sync (бэкенд); ai, files, search (чат)
-  static/         веб-интерфейс (index.html)
+  api/routes/chat_sessions.py  сессии чата
+frontend/         React-приложение (Vite, nginx в контейнере)
   cli.py          python -m app.cli sync-tags
-alembic/versions/ 0001 (каталог), 0002 (пользователи и админ), 0003 (остальные таблицы)
+alembic/versions/ 0001 (каталог), 0002 (пользователи и админ), 0003 (остальные таблицы), 0004 (сессии чата)
 prompts/          промпты агентов
 scripts/          пайплайн каталога: генерация карточек, загрузка в Postgres и Qdrant
 tests/            pytest

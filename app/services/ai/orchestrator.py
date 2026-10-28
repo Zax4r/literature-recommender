@@ -33,6 +33,25 @@ def build_search_query(
     return " ".join(p for p in parts if p)
 
 
+OVERFETCH = 5
+
+
+def prefer_genres(cards: list[dict], genres: list[str]) -> list[dict]:
+    """Оставляет книги, чьи жанры/тропы содержат запрошенный жанр (если такие нашлись).
+
+    Гибридный поиск по короткому запросу вроде «фэнтези» поднимает в топ случайные книги,
+    поэтому результат дополнительно сверяется с жанрами из запроса."""
+    wanted = [g.strip().lower() for g in genres if g.strip()]
+    if not wanted:
+        return cards
+    matched = [
+        c
+        for c in cards
+        if any(w in " ".join([*c.get("genres", []), *c.get("tropes", [])]).lower() for w in wanted)
+    ]
+    return matched or cards
+
+
 def _base(user_text: str, untrusted_text: str | None, source: str) -> dict:
     return {
         "input": {
@@ -164,7 +183,7 @@ async def run_chat(
             query_text,
             exclude_tropes=meta["exclude"],
             exclude_ids=sorted(exclude_ids),
-            top_k=settings.SEARCH_TOP_K,
+            top_k=settings.SEARCH_TOP_K * OVERFETCH,
             prefetch_k=settings.SEARCH_PREFETCH_K,
         ),
         settings.SEARCH_TIMEOUT_SECONDS,
@@ -178,8 +197,7 @@ async def run_chat(
             [],
             label="search-fallback",
         )
-    cards = cards or []
-    cards = cards[: settings.SEARCH_TOP_K]
+    cards = prefer_genres(cards or [], meta["genres"])[: settings.SEARCH_TOP_K]
     mark("search")
 
     if not cards:

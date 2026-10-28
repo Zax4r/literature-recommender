@@ -74,11 +74,11 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
-# Стабильные ссылки-шаблоны на страницы поиска магазинов (фолбэк, если
-# web-поиск недоступен). {q} заменяется на URL-encoded «название автор».
+# Ссылки на страницы поиска магазинов (фолбэк, если web-поиск недоступен; проверены
+# вручную, открываются без логина). {q} заменяется на URL-encoded «название автор».
 BOOK_SHOP_SEARCH_TEMPLATES: dict[str, str] = {
-    "OZ.by": "https://www.oz.by/search/?q={q}",
-    "Ozon.by": "https://www.ozon.by/search/?text={q}",
-    "Литрес": "https://www.litres.ru/pages/biblio_search/?q={q}",
+    "OZ.by": "https://oz.by/search/?q={q}",
+    "Литрес": "https://www.litres.ru/search/?q={q}",
     "Лабиринт": "https://www.labirint.ru/search/{q}/",
+    "Goodreads": "https://www.goodreads.com/search?q={q}",
 }
