@@ -10,7 +10,7 @@ import asyncio
 import logging
 from urllib.parse import quote
 
-from config import settings, BOOK_SHOP_SEARCH_TEMPLATES
+from app.core.config import settings, BOOK_SHOP_SEARCH_TEMPLATES
 from app.services.ai import PROJECT_ROOT
 from app.services.ai.clients.llm import chat_completion
 from app.services.ai.guard import parse_json_llm, wrap_untrusted
@@ -85,6 +85,8 @@ async def find_stores(books: list[dict]) -> list[dict]:
     [{"title", "author", "stores": [{"name", "url", "kind"}]}]."""
     if not books:
         return []
+    if not settings.SHOP_SEARCH_ENABLED:
+        return [{**b, "stores": _template_stores(b)} for b in books]
     queries = [
         f"{b.get('title', '')} {b.get('author', '')} купить Беларусь книжный магазин".strip()
         for b in books

@@ -4,21 +4,66 @@ services:
     environment:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: literature
+    ports:
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d literature"]
       interval: 3s
-      retries: 10
+      timeout: 3s
+      retries: 20
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "127.0.0.1:6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/6333"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  # One-shot setup: migrations, then the book catalog into Postgres and Qdrant, then tags.
+  # The first run embeds ~6.5k books on CPU and takes several minutes; later runs reuse the cache.
+  init:
+    build: .
+    env_file: .env
+    environment: &stack
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/literature
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: "6333"
+    volumes:
+      - ./scripts/data:/app/scripts/data
+      - hf_cache:/root/.cache/huggingface
+    depends_on:
+      db:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    restart: "no"
+    command: >
+      sh -c "alembic upgrade head &&
+             python -m scripts.run_pipeline --skip-generate &&
+             python -m app.cli sync-tags"
 
   api:
     build: .
     env_file: .env
+    environment: *stack
     ports:
       - "8000:8000"
+    volumes:
+      - ./storage:/app/storage
+      - hf_cache:/root/.cache/huggingface
     depends_on:
-      db:
-        condition: service_healthy
+      init:
+        condition: service_completed_successfully
 
 volumes:
   pgdata:
+  qdrant_data:
+  hf_cache:

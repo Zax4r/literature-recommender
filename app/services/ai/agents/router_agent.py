@@ -2,7 +2,7 @@
 
 import logging
 
-from config import settings
+from app.core.config import settings
 from app.services.ai import PROJECT_ROOT
 from app.services.ai.clients.llm import chat_completion
 from app.services.ai.guard import parse_json_llm, run_prefilter, wrap_untrusted

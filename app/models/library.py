@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, SmallInteger, String, func
+from sqlalchemy import BigInteger, DateTime, ForeignKey, SmallInteger, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -15,7 +15,7 @@ class UserBook(Base):
         ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
     )
     book_id: Mapped[int] = mapped_column(
-        ForeignKey("books.id", ondelete="CASCADE"), primary_key=True
+        BigInteger, ForeignKey("books.id", ondelete="CASCADE"), primary_key=True
     )
     status: Mapped[str] = mapped_column(String(16))
     rating: Mapped[int | None] = mapped_column(SmallInteger)

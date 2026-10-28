@@ -6,6 +6,7 @@ Status = Literal["read", "reading", "dropped", "planned"]
 
 
 class TagOut(BaseModel):
+    id: int
     name: str
     score: int
     my_vote: int
@@ -14,8 +15,7 @@ class TagOut(BaseModel):
 class BookListItem(BaseModel):
     id: int
     title: str
-    authors: list[str]
-    image_url: str | None
+    author: str
     is_favorite: bool
     status: Status | None
     rating: int | None
@@ -23,7 +23,8 @@ class BookListItem(BaseModel):
 
 class BookDetail(BookListItem):
     description: str
-    url: str | None
+    genres: list[str]
+    tropes: list[str]
     store_url: str
     tags: list[TagOut]
 
@@ -33,11 +34,6 @@ class BookPage(BaseModel):
     total: int
     offset: int
     limit: int
-
-
-class ImportResult(BaseModel):
-    imported: int
-    skipped: int
 
 
 class EntryIn(BaseModel):
@@ -50,4 +46,4 @@ class VoteIn(BaseModel):
 
 
 class TagIn(BaseModel):
-    name: str = Field(min_length=2, max_length=40)
+    name: str = Field(min_length=2, max_length=100)

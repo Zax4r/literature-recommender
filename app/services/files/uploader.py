@@ -12,7 +12,7 @@ from pathlib import Path
 from fastapi import HTTPException, UploadFile
 
 from app.services.files import parser, whisper
-from config import settings
+from app.core.config import settings
 
 logger = logging.getLogger("uploader")
 

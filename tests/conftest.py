@@ -2,7 +2,7 @@ from collections.abc import Iterator
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, update
+from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -10,9 +10,10 @@ from app import models  # noqa: F401
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
-from app.models import User
-from app.services import ucsd
-from app.services.ucsd import BookRecord
+from app.models import Book
+from app.services.tag_sync import sync_book_tags
+
+BOOK_COUNT = 25
 
 
 @pytest.fixture
@@ -35,23 +36,6 @@ def client(session_factory: sessionmaker[Session]) -> Iterator[TestClient]:
     app.dependency_overrides.clear()
 
 
-def fake_books(limit: int) -> Iterator[BookRecord]:
-    for i in range(1, min(limit, 30) + 1):
-        yield BookRecord(
-            str(i),
-            f"Book {i}",
-            "x" * 400,
-            None,
-            f"https://example.com/{i}",
-            (str(i % 3),),
-            (("fantasy", 5), (f"genre-{i % 3}", 3)),
-        )
-
-
-def fake_author_names(author_ids: set[str]) -> dict[str, str]:
-    return {a: f"Author {a}" for a in author_ids}
-
-
 @pytest.fixture
 def auth(client: TestClient) -> dict[str, str]:
     client.post(
@@ -65,15 +49,19 @@ def auth(client: TestClient) -> dict[str, str]:
 
 
 @pytest.fixture
-def admin(auth: dict[str, str], session_factory: sessionmaker[Session]) -> dict[str, str]:
+def imported(client: TestClient, session_factory: sessionmaker[Session]) -> None:
+    """A small catalog shaped like the pipeline's output: book i has source_idx i - 1."""
     with session_factory() as session:
-        session.execute(update(User).values(is_admin=True))
+        session.add_all(
+            Book(
+                source_idx=i - 1,
+                title=f"Book {i}",
+                author=f"Author {i % 3}",
+                description="x" * 400,
+                genres=["Фэнтези", f"Жанр {i % 3}"],
+                tropes=["Найденная семья", "Поиск пути, или судьба"],
+            )
+            for i in range(1, BOOK_COUNT + 1)
+        )
         session.commit()
-    return auth
-
-
-@pytest.fixture
-def imported(client: TestClient, admin: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(ucsd, "fetch_books", fake_books)
-    monkeypatch.setattr(ucsd, "fetch_author_names", fake_author_names)
-    assert client.post("/api/v1/books/import?count=25", headers=admin).status_code == 200
+        sync_book_tags(session)

@@ -1,50 +1,29 @@
-import json
-
 from fastapi.testclient import TestClient
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session, sessionmaker
 
-from app.services.ucsd import parse_record, topic_shelves
-
-
-def test_parse_record_cleans_html_and_skips_unusable() -> None:
-    line = json.dumps(
-        {"book_id": "7", "title": " T ", "description": "a<br />b &amp; c\n\n d", "url": "u"}
-    ).encode()
-    record = parse_record(line)
-    assert record is not None
-    assert (record.title, record.description) == ("T", "a b & c d")
-    assert (
-        parse_record(json.dumps({"book_id": "8", "title": "T", "description": ""}).encode()) is None
-    )
-
-
-def test_import_requires_auth(client: TestClient) -> None:
-    assert client.post("/api/v1/books/import").status_code == 401
-
-
-def test_import_forbidden_for_regular_user(client: TestClient, auth: dict[str, str]) -> None:
-    assert client.post("/api/v1/books/import", headers=auth).status_code == 403
-
-
-def test_import_is_idempotent(client: TestClient, admin: dict[str, str], imported: None) -> None:
-    again = client.post("/api/v1/books/import?count=25", headers=admin)
-    assert again.json() == {"imported": 0, "skipped": 25}
-    assert client.get("/api/v1/books").json()["total"] == 25
+from app.models import Book, BookTag, Tag
+from app.services.tag_sync import sync_book_tags
 
 
 def test_feed_pagination(client: TestClient, imported: None) -> None:
     page = client.get("/api/v1/books?offset=20&limit=10").json()
     assert (page["total"], page["offset"], page["limit"]) == (25, 20, 10)
     assert [b["title"] for b in page["items"]] == [f"Book {i}" for i in range(21, 26)]
+    assert page["items"][0]["author"] == "Author 0"
     assert client.get("/api/v1/books?limit=0").status_code == 422
+    assert client.get("/api/v1/books?limit=101").status_code == 422
     assert client.get("/api/v1/books?offset=-1").status_code == 422
 
 
-def test_book_detail_truncates_description(client: TestClient, imported: None) -> None:
+def test_book_detail(client: TestClient, imported: None) -> None:
     book = client.get("/api/v1/books/1").json()
     assert book["title"] == "Book 1"
-    assert book["authors"] == ["Author 1"]
-    assert book["is_favorite"] is False
     assert len(book["description"]) == 250
+    assert book["genres"] == ["Фэнтези", "Жанр 1"]
+    assert book["tropes"] == ["Найденная семья", "Поиск пути, или судьба"]
+    assert book["is_favorite"] is False and book["status"] is None
+    assert book["store_url"].startswith("https://oz.by/search/?q=Book+1+Author+1")
     assert client.get("/api/v1/books/999").status_code == 404
 
 
@@ -67,20 +46,21 @@ def test_favorites_flow(client: TestClient, auth: dict[str, str], imported: None
     assert client.put("/api/v1/books/1/favorite").status_code == 401
 
 
-def test_login_by_username(client: TestClient, auth: dict[str, str]) -> None:
-    response = client.post(
-        "/api/v1/auth/login", data={"username": "alice", "password": "password123"}
-    )
-    assert response.status_code == 200
-
-
-def test_topic_shelves_drops_reader_state_noise_and_rare_shelves() -> None:
-    shelves = [
-        {"name": "to-read", "count": "900"},
-        {"name": "read-2015", "count": "50"},
-        {"name": "fantasy", "count": "40"},
-        {"name": "found-family", "count": "12"},
-        {"name": "once", "count": "1"},
-        {"name": "shelfari-favorites", "count": "30"},
-    ]
-    assert topic_shelves(shelves) == (("fantasy", 40), ("found-family", 12))
+def test_sync_tags_creates_votable_tags_and_is_idempotent(
+    imported: None, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        # genres: "Фэнтези" + 3 "Жанр N"; tropes: 2 shared ones
+        assert session.scalar(select(func.count()).select_from(Tag)) == 6
+        assert session.scalar(select(func.count()).select_from(BookTag)) == 25 * 4
+        assert sync_book_tags(session) == (0, 0)
+        first = session.scalar(select(Book).order_by(Book.id))
+        assert first is not None
+        weights = dict(
+            session.execute(
+                select(Tag.name, BookTag.weight)
+                .join(BookTag, BookTag.tag_id == Tag.id)
+                .where(BookTag.book_id == first.id)
+            ).all()
+        )
+        assert weights["фэнтези"] > weights["жанр 1"] > weights["найденная семья"]
