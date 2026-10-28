@@ -1,16 +1,15 @@
-# Secrets
-.env
-
 # Python
 __pycache__/
 *.py[cod]
 .venv/
 venv/
-
-# Tooling
+.mypy_cache/
+.ruff_cache/
 .pytest_cache/
 .coverage
-.mypy_cache/
+
+# Secrets
+.env
 
 # Runtime storage
 storage/temp_upload/

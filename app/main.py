@@ -1,20 +1,14 @@
-"""FastAPI-приложение.
-
-Ваша зона: чат (app/api/chat.py + агенты). Остальные роутеры
-(auth, профиль, списки, голосования) добавит владелец бэкенда —
-подключайте их здесь же через app.include_router(...).
-"""
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.api.chat import router as chat_router
+from app.api.router import api_router
+from app.api.routes import health
 
-app = FastAPI(
-    title="Literature Recommender — Chat API",
-    description="Агенты рекомендаций: гибридный поиск, whisper, поиск по магазинам.",
-    version="0.2.0",
-)
+app = FastAPI(title="Literature Recommender")
 
 app.add_middleware(
     CORSMiddleware,
@@ -24,14 +18,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(health.router)
+app.include_router(api_router)
 app.include_router(chat_router)
 
-
-@app.get("/")
-async def root():
-    return {"service": "literature-recommender", "docs": "/docs", "health": "/health"}
-
-
-@app.get("/health")
-async def health():
-    return {"status": "ok"}
+# Mounted last so it only serves paths no API route matched.
+app.mount("/", StaticFiles(directory=Path(__file__).parent / "static", html=True), name="static")
