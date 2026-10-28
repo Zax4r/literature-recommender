@@ -42,6 +42,7 @@ services:
 
   pipeline:
     build: .
+    env_file: .env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       QDRANT_HOST: qdrant
@@ -57,12 +58,12 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_healthy
-    command: >
-      sh -c "alembic upgrade head &&
-             python -m scripts.run_pipeline --skip-generate"
+    # Chat search uses Qdrant only; the Postgres `books` table belongs to the backend schema.
+    command: ["python", "-m", "scripts.run_pipeline", "--skip-generate", "--skip-postgres"]
 
   api:
     build: .
+    env_file: .env
     ports:
       - "8000:8000"
     environment:
@@ -79,9 +80,20 @@ services:
       - ./storage:/app/storage
       - hf_cache:/root/.cache/huggingface
     depends_on:
+      db:
+        condition: service_healthy
       qdrant:
         condition: service_healthy
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - api
 
 volumes:
   pgdata:

@@ -23,8 +23,9 @@ SHOP_PROMPT_TEMPLATE = (PROJECT_ROOT / "prompts" / "book_shop_agent_prompt.txt")
 )
 
 
-def _template_stores(book: dict) -> list[dict]:
-    q = quote(f"{book.get('title', '')} {book.get('author', '')}".strip())
+def template_stores(book: dict) -> list[dict]:
+    """Ссылки на поиск книги по названию в магазинах (автор в запрос не входит: ломает выдачу)."""
+    q = quote(str(book.get("title", "")).strip())
     return [
         {"name": name, "url": template.format(q=q), "kind": "paper"}
         for name, template in BOOK_SHOP_SEARCH_TEMPLATES.items()
@@ -139,5 +140,5 @@ async def find_stores(books: list[dict]) -> list[dict]:
     out = []
     for b in books:
         stores = by_title.get(str(b.get("title", "")).strip().lower())
-        out.append({**b, "stores": stores if stores else _template_stores(b)})
+        out.append({**b, "stores": stores if stores else template_stores(b)})
     return out

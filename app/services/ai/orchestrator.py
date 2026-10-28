@@ -5,6 +5,7 @@
 """
 
 import logging
+from collections.abc import Callable
 
 from config import settings
 from app.services.ai import context
@@ -27,6 +28,25 @@ def build_search_query(
     if tropes:
         parts.append("ТРОПЫ: " + ", ".join(tropes))
     return " ".join(p for p in parts if p)
+
+
+OVERFETCH = 5
+
+
+def prefer_genres(cards: list[dict], genres: list[str]) -> list[dict]:
+    """Оставляет книги, чьи жанры/тропы содержат запрошенный жанр (если такие нашлись).
+
+    Гибридный поиск по короткому запросу вроде «фэнтези» поднимает в топ случайные книги,
+    поэтому результат дополнительно сверяется с жанрами из запроса."""
+    wanted = [g.strip().lower() for g in genres if g.strip()]
+    if not wanted:
+        return cards
+    matched = [
+        c
+        for c in cards
+        if any(w in " ".join([*c.get("genres", []), *c.get("tropes", [])]).lower() for w in wanted)
+    ]
+    return matched or cards
 
 
 def _base(user_text: str, untrusted_text: str | None, source: str) -> dict:
@@ -53,12 +73,18 @@ async def run_chat(
     source: str = "chat",
     user_id: str | None = None,
     history: list | None = None,
+    on_stage: Callable[[str], None] | None = None,
 ) -> dict:
+    def stage(name: str) -> None:
+        if on_stage:
+            on_stage(name)
+
     base = _base(user_text, untrusted_text, source)
     full_input = "\n".join(
         p for p in (user_text or "", untrusted_text or "") if p
     )
 
+    stage("routing")
     decision = await router_agent.route_request(
         full_input or "(пусто)", has_history=bool(history)
     )
@@ -96,6 +122,7 @@ async def run_chat(
         return base
 
     # --- recommend ---
+    stage("extracting")
     meta = await extractor.extract_metadata(user_text, untrusted_text)
     summary = decision.get("user_summary") or user_text or untrusted_text or ""
     query_text = build_search_query(summary, meta["genres"], meta["tropes"]).strip()
@@ -117,19 +144,20 @@ async def run_chat(
         except Exception as exc:
             logger.warning("get_filtered_book_ids(%s) failed: %s", user_id, exc)
 
+    stage("searching")
     try:
         cards = await qdrant_search.hybrid_search(
             query_text,
             exclude_tropes=meta["exclude"],
             exclude_ids=sorted(exclude_ids),
-            top_k=settings.SEARCH_TOP_K,
+            top_k=settings.SEARCH_TOP_K * OVERFETCH,
             prefetch_k=settings.SEARCH_PREFETCH_K,
         )
     except Exception as exc:
         logger.warning("hybrid_search fallback to dense: %s", exc)
         cards = await qdrant_search.dense_fallback(query_text, top_k=settings.SEARCH_TOP_K)
 
-    cards = cards[: settings.SEARCH_TOP_K]
+    cards = prefer_genres(cards, meta["genres"])[: settings.SEARCH_TOP_K]
     if not cards:
         base.update(
             _simple(
@@ -140,16 +168,13 @@ async def run_chat(
         )
         return base
 
-    stores_by_title: dict[str, list[dict]] = {}
-    try:
-        books_for_shops = [{"title": c["title"], "author": c["author"]} for c in cards]
-        with_stores = await book_shop_agent.find_stores(books_for_shops)
-        stores_by_title = {
-            b["title"].strip().lower(): b["stores"] for b in with_stores
-        }
-    except Exception as exc:
-        logger.warning("Поиск по магазинам не удался: %s", exc)
+    # Web-поиск ссылок на магазины отдавал нерабочие страницы и добавлял ~20 с к ответу:
+    # даём проверенные ссылки на поиск по названию.
+    stores_by_title = {
+        str(c["title"]).strip().lower(): book_shop_agent.template_stores(c) for c in cards
+    }
 
+    stage("formatting")
     answer = await formatter.compose_answer(
         cards, stores_by_title, decision.get("user_summary") or "", meta["tropes"]
     )

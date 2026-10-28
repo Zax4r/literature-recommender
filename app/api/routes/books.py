@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 from app.api.deps import AdminUser, CurrentUser, DbSession, OptionalUser
 from app.models import Author, Book, BookTag, Favorite, Tag
 from app.schemas.book import BookDetail, BookPage, ImportResult
-from app.services import ucsd
+from app.services import catalog, ucsd
 from app.services.books import book_tags, get_book_or_404, store_url, to_list_items
 
 router = APIRouter(prefix="/books", tags=["books"])
@@ -74,6 +74,16 @@ def import_books(
         db.add_all(BookTag(book=book, tag=tags[name], weight=count) for name, count in r.shelves)
     db.commit()
     return ImportResult(imported=len(new), skipped=len(records) - len(new))
+
+
+@router.post("/sync", response_model=ImportResult)
+def sync_catalog(_: AdminUser, db: DbSession) -> ImportResult:
+    """Adds the books stored in Qdrant (the ones the chat recommends) to the catalog."""
+    try:
+        imported, skipped = catalog.sync_from_qdrant(db)
+    except Exception as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Qdrant unavailable: {exc}") from exc
+    return ImportResult(imported=imported, skipped=skipped)
 
 
 @router.get("/{book_id}", response_model=BookDetail)

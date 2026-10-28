@@ -1,14 +1,23 @@
-from pathlib import Path
+import threading
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 
 from app.api.chat import router as chat_router
 from app.api.router import api_router
 from app.api.routes import health
+from app.services import catalog
 
-app = FastAPI(title="Literature Recommender")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    threading.Thread(target=catalog.sync_when_ready, daemon=True).start()
+    yield
+
+
+app = FastAPI(title="Literature Recommender", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -21,6 +30,3 @@ app.add_middleware(
 app.include_router(health.router)
 app.include_router(api_router)
 app.include_router(chat_router)
-
-# Mounted last so it only serves paths no API route matched.
-app.mount("/", StaticFiles(directory=Path(__file__).parent / "static", html=True), name="static")
