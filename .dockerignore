@@ -4,5 +4,10 @@ __pycache__
 *.pyc
 .env
 storage
+tests
+.mypy_cache
+.ruff_cache
+.pytest_cache
 book_examples.json
 README.md
+scripts/data/3_embeddings

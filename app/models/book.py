@@ -1,34 +1,29 @@
-from sqlalchemy import Column, ForeignKey, String, Table, Text
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from datetime import datetime
+
+from sqlalchemy import ARRAY, JSON, BigInteger, DateTime, ForeignKey, Integer, Text, func
+from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
 
-book_authors = Table(
-    "book_authors",
-    Base.metadata,
-    Column("book_id", ForeignKey("books.id", ondelete="CASCADE"), primary_key=True),
-    Column("author_id", ForeignKey("authors.id", ondelete="CASCADE"), primary_key=True),
-)
-
-
-class Author(Base):
-    __tablename__ = "authors"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    goodreads_id: Mapped[str] = mapped_column(String(32), unique=True, index=True)
-    name: Mapped[str] = mapped_column(String(255))
+# Postgres uses a native text[]; SQLite (tests) falls back to JSON.
+TextArray = ARRAY(Text).with_variant(JSON(), "sqlite")
+# SQLite only autoincrements INTEGER primary keys.
+BigId = BigInteger().with_variant(Integer(), "sqlite")
 
 
 class Book(Base):
+    """A catalog card from the data pipeline; `source_idx` is the key shared with Qdrant."""
+
     __tablename__ = "books"
 
-    id: Mapped[int] = mapped_column(primary_key=True)
-    goodreads_id: Mapped[str] = mapped_column(String(32), unique=True, index=True)
-    title: Mapped[str] = mapped_column(String(512))
+    id: Mapped[int] = mapped_column(BigId, primary_key=True, autoincrement=True)
+    source_idx: Mapped[int] = mapped_column(unique=True)
+    title: Mapped[str] = mapped_column(Text)
+    author: Mapped[str] = mapped_column(Text)
     description: Mapped[str] = mapped_column(Text)
-    image_url: Mapped[str | None] = mapped_column(String(512))
-    url: Mapped[str | None] = mapped_column(String(512))
-    authors: Mapped[list[Author]] = relationship(secondary=book_authors, lazy="selectin")
+    genres: Mapped[list[str]] = mapped_column(TextArray, default=list)
+    tropes: Mapped[list[str]] = mapped_column(TextArray, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class Favorite(Base):
@@ -38,5 +33,5 @@ class Favorite(Base):
         ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
     )
     book_id: Mapped[int] = mapped_column(
-        ForeignKey("books.id", ondelete="CASCADE"), primary_key=True
+        BigInteger, ForeignKey("books.id", ondelete="CASCADE"), primary_key=True
     )

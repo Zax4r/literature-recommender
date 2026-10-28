@@ -13,6 +13,15 @@ dependencies = [
     "python-multipart>=0.0.32",
     "sqlalchemy>=2",
     "uvicorn[standard]>=0.54.0",
+    # AI chat and data pipeline
+    "faster-whisper>=1.1",
+    "av>=15,<17",  # faster-whisper 1.2 breaks on av 17+ (metadata_errors argument)
+    "openai>=1.0",
+    "pypdf>=4.0",
+    "python-docx>=1.1",
+    "qdrant-client>=1.16",
+    "sentence-transformers>=2.7",
+    "torch>=2.2",
 ]
 
 [dependency-groups]
@@ -24,18 +33,43 @@ dev = [
     "ruff>=0.17.2",
 ]
 
+# CPU-only torch on Linux: the default CUDA wheels add several GB for nothing.
+[tool.uv.sources]
+torch = { index = "pytorch-cpu", marker = "sys_platform == 'linux'" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-extend-exclude = ["alembic/versions"]
+# The AI chat and pipeline code (scripts, prompts, app/services/{ai,files,search}) is not linted yet.
+extend-exclude = [
+    "alembic/versions",
+    "scripts",
+    "prompts",
+    "app/services/ai",
+    "app/services/files",
+    "app/services/search",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.File", "fastapi.Form", "fastapi.Depends"]
+
 [tool.mypy]
 strict = true
 plugins = []
-exclude = ["alembic/"]
+exclude = ["alembic/", "scripts/", "prompts/"]
+
+# Teammate's AI chat code is not type-checked yet.
+[[tool.mypy.overrides]]
+module = ["app.api.chat", "app.services.ai.*", "app.services.files.*", "app.services.search.*"]
+ignore_errors = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

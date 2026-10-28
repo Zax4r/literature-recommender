@@ -10,12 +10,8 @@ from app.services.books import book_tags, get_book_or_404, normalize_tag_name
 router = APIRouter(prefix="/books/{book_id}/tags", tags=["tags"])
 
 
-def get_book_tag_or_404(db: Session, book_id: int, name: str) -> BookTag:
-    book_tag = db.scalar(
-        select(BookTag)
-        .join(Tag, Tag.id == BookTag.tag_id)
-        .where(BookTag.book_id == book_id, Tag.name == normalize_tag_name(name))
-    )
+def get_book_tag_or_404(db: Session, book_id: int, tag_id: int) -> BookTag:
+    book_tag = db.get(BookTag, (book_id, tag_id))
     if book_tag is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Tag not found on this book")
     return book_tag
@@ -51,19 +47,19 @@ def suggest_tag(book_id: int, data: TagIn, user: CurrentUser, db: DbSession) -> 
     return book_tags(db, book_id, user)
 
 
-@router.put("/{name}/vote", response_model=list[TagOut])
+@router.put("/{tag_id}/vote", response_model=list[TagOut])
 def vote_tag(
-    book_id: int, name: str, data: VoteIn, user: CurrentUser, db: DbSession
+    book_id: int, tag_id: int, data: VoteIn, user: CurrentUser, db: DbSession
 ) -> list[TagOut]:
-    book_tag = get_book_tag_or_404(db, book_id, name)
+    book_tag = get_book_tag_or_404(db, book_id, tag_id)
     set_vote(db, user.id, book_tag, data.value)
     db.commit()
     return book_tags(db, book_id, user)
 
 
-@router.delete("/{name}/vote", response_model=list[TagOut])
-def remove_vote(book_id: int, name: str, user: CurrentUser, db: DbSession) -> list[TagOut]:
-    book_tag = get_book_tag_or_404(db, book_id, name)
+@router.delete("/{tag_id}/vote", response_model=list[TagOut])
+def remove_vote(book_id: int, tag_id: int, user: CurrentUser, db: DbSession) -> list[TagOut]:
+    book_tag = get_book_tag_or_404(db, book_id, tag_id)
     vote = db.get(TagVote, (user.id, book_id, book_tag.tag_id))
     if vote is not None:
         db.delete(vote)

@@ -20,10 +20,9 @@
   button:disabled { opacity:.4; cursor:default; }
   input { font:inherit; padding:8px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--text); width:100%; }
   .tabs button.active { border-color:var(--accent); color:var(--accent); }
-  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:14px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); gap:14px; }
   .card { background:var(--card); border:1px solid var(--line); border-radius:8px; overflow:hidden; cursor:pointer; position:relative; }
-  .card img { width:100%; aspect-ratio:2/3; object-fit:cover; display:block; background:var(--line); }
-  .card .meta { padding:8px; }
+    .card .meta { padding:12px 40px 12px 12px; }
   .card .title { font-weight:600; font-size:14px; }
   .muted { color:var(--muted); font-size:13px; }
   .heart { position:absolute; top:6px; right:6px; background:var(--card); border-radius:50%; width:32px; height:32px; padding:0; }
@@ -31,7 +30,6 @@
   .pager { display:flex; gap:12px; align-items:center; justify-content:center; margin:20px 0; }
   dialog { border:1px solid var(--line); border-radius:10px; background:var(--card); color:var(--text); max-width:520px; width:92%; }
   dialog::backdrop { background:rgba(0,0,0,.5); }
-  dialog img { float:left; width:110px; margin:0 14px 8px 0; border-radius:4px; }
   .form { display:grid; gap:10px; max-width:340px; margin:40px auto; }
   .error { color:#d33; min-height:1.4em; }
   .tags { display:flex; flex-wrap:wrap; gap:6px; margin:10px 0; clear:both; }
@@ -44,6 +42,12 @@
   textarea { font:inherit; width:100%; padding:8px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--text); }
   .rec { border:1px solid var(--line); border-radius:8px; padding:12px; margin-bottom:14px; background:var(--card); }
   .rec .grid { margin-top:10px; }
+  .chat-box { display:flex; flex-direction:column; gap:8px; }
+  .bubble { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:10px 12px; white-space:pre-wrap; }
+  .bubble.me { border-color:var(--accent); }
+  .stores { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
+  .stores a { font-size:12px; border:1px solid var(--line); border-radius:12px; padding:1px 8px; text-decoration:none; }
+  button.rec-on { background:#d33; border-color:#d33; color:#fff; }
   [hidden] { display:none !important; }
 </style>
 </head>
@@ -54,9 +58,8 @@
     <button data-tab="feed" class="active">Лента</button>
     <button data-tab="favorites">Избранное</button>
     <button data-tab="library">Библиотека</button>
-    <button data-tab="recs">Рекомендации</button>
+    <button data-tab="recs">Чат</button>
   </nav>
-  <button id="importBtn" hidden>Импорт 100 книг</button>
   <span id="who" class="muted"></span>
   <button id="authBtn">Войти</button>
 </header>
@@ -74,11 +77,13 @@
   <section id="recsPanel" hidden>
     <textarea id="recQuery" rows="3" placeholder="Опишите, что хотите почитать, или назовите книгу, на которую хотите быть похожей"></textarea>
     <div class="row">
-      <button class="primary" id="recBtn">Подобрать</button>
-      <label class="muted">или файл .txt <input type="file" id="recFile" accept=".txt,text/plain" style="width:auto;border:none"></label>
+      <button class="primary" id="recBtn">Отправить</button>
+      <button id="micBtn" title="Записать голос">🎤 Голос</button>
+      <label class="muted">файл (.txt, .pdf, .docx, аудио) <input type="file" id="recFile" style="width:auto;border:none"></label>
     </div>
+    <div class="muted" id="recStatus"></div>
     <div class="error" id="recError"></div>
-    <div id="recList"></div>
+    <div class="chat-box" id="recList"></div>
   </section>
 
   <section id="list">
@@ -103,7 +108,7 @@ const API = "/api/v1";
 const LIMIT = 12;
 const $ = (id) => document.getElementById(id);
 const STATUSES = { read: "Прочитано", reading: "Читаю", dropped: "Брошено", planned: "В планах" };
-const state = { libStatus: "", token: localStorage.getItem("token"), me: null, tab: "feed", offset: 0, total: 0 };
+const state = { libStatus: "", recorder: null, token: localStorage.getItem("token"), me: null, tab: "feed", offset: 0, total: 0 };
 
 async function api(path, { method = "GET", body, form } = {}) {
   const headers = {};
@@ -134,7 +139,6 @@ async function loadMe() {
 async function render() {
   const authed = !!state.me;
   $("tabs").hidden = !authed;
-  $("importBtn").hidden = !(state.me && state.me.is_admin);
   $("who").textContent = authed ? state.me.username : "";
   $("authBtn").textContent = authed ? "Выйти" : "Войти";
   document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === state.tab));
@@ -152,7 +156,7 @@ async function loadBooks() {
   try {
     const page = await api(`${paths[state.tab]}?offset=${state.offset}&limit=${LIMIT}${extra}`);
     state.total = page.total;
-    $("status").textContent = page.total ? "" : ({ favorites: "В избранном пока пусто.", library: "На полках пока пусто.", feed: "Книг нет. Войдите как admin и нажмите «Импорт»." })[state.tab];
+    $("status").textContent = page.total ? "" : ({ favorites: "В избранном пока пусто.", library: "На полках пока пусто.", feed: "Каталог пуст: запустите загрузку (docker compose up)." })[state.tab];
     $("grid").replaceChildren(...page.items.map(card));
     const from = page.total ? state.offset + 1 : 0;
     $("pageInfo").textContent = `${from}–${state.offset + page.items.length} из ${page.total}`;
@@ -184,8 +188,7 @@ function card(book) {
   const rebuild = () => { if (state.tab === "favorites") loadBooks(); else node.replaceWith(card(book)); };
   const badge = book.status ? el("div", { className: "badge" }, STATUSES[book.status] + (book.rating ? ` · ${"★".repeat(book.rating)}` : "")) : "";
   node.append(
-    el("img", { src: book.image_url || "", loading: "lazy", alt: "" }),
-    el("div", { className: "meta" }, el("div", { className: "title" }, book.title), el("div", { className: "muted" }, book.authors.join(", ")), badge),
+    el("div", { className: "meta" }, el("div", { className: "title" }, book.title), el("div", { className: "muted" }, book.author), badge),
   );
   const h = heart(book, rebuild);
   if (h) node.append(h);
@@ -201,7 +204,7 @@ async function openBook(id) {
   const drawTags = (tags) => {
     tagBox.replaceChildren(...tags.map((t) => {
       const vote = async (value) => {
-        const next = await api(`/books/${id}/tags/${encodeURIComponent(t.name)}/vote`, t.my_vote === value ? { method: "DELETE" } : { method: "PUT", body: { value } });
+        const next = await api(`/books/${id}/tags/${t.id}/vote`, t.my_vote === value ? { method: "DELETE" } : { method: "PUT", body: { value } });
         drawTags(next);
       };
       const chip = el("span", { className: "tag" }, `${t.name} ${t.score}`);
@@ -215,9 +218,9 @@ async function openBook(id) {
   drawTags(book.tags);
 
   const body = el("div", {},
-    el("img", { src: book.image_url || "", alt: "" }),
     el("h2", {}, book.title),
-    el("div", { className: "muted" }, book.authors.join(", ")),
+    el("div", { className: "muted" }, book.author),
+    el("div", { className: "muted" }, book.genres.join(" · ")),
     el("p", {}, book.description.length >= 250 ? book.description + "…" : book.description),
     tagBox,
   );
@@ -247,33 +250,50 @@ async function openBook(id) {
   }
   actions.append(el("div", { className: "row" },
     el("a", { href: book.store_url, target: "_blank", rel: "noopener" }, "Найти в магазине"),
-    book.url ? el("a", { href: book.url, target: "_blank", rel: "noopener" }, "Goodreads") : "",
     el("button", { onclick: () => dlg.close(), style: "margin-left:auto" }, "Закрыть")));
   dlg.replaceChildren(body, actions);
   if (!dlg.open) dlg.showModal();
 }
 
+function storeLinks(stores) {
+  return el("div", { className: "stores" }, ...stores.map((x) => el("a", { href: x.url, target: "_blank", rel: "noopener" }, x.name)));
+}
+
 function recBlock(rec) {
   const grid = el("div", { className: "grid" }, ...rec.items.map((i) => {
     const node = card(i.book);
-    node.querySelector(".meta").append(el("div", { className: "muted" }, i.reason));
+    node.querySelector(".meta").append(el("div", { className: "muted" }, i.reason), storeLinks(i.stores));
+    node.onclick = (ev) => { if (!ev.target.closest("a")) openBook(i.book.id); };
     return node;
   }));
-  return el("div", { className: "rec" },
-    el("div", { className: "muted" }, `${new Date(rec.created_at).toLocaleString()} · ${rec.source === "file" ? "файл" : "текст"}`),
-    el("div", {}, rec.query.length > 200 ? rec.query.slice(0, 200) + "…" : rec.query),
-    rec.items.length ? grid : el("div", { className: "muted" }, "Ничего не нашлось. Попробуйте другие слова (названия жанров и тегов на английском)."));
+  return el("div", {},
+    el("div", { className: "bubble me" }, rec.query),
+    el("div", { className: "bubble" }, rec.answer),
+    rec.items.length ? grid : "");
 }
 
 async function loadRecs() {
-  const page = await api("/recommendations?limit=20");
+  const page = await api("/recommendations?limit=10");
   $("recList").replaceChildren(...page.items.map(recBlock));
 }
 
-async function sendRec(request) {
+async function sendChat(message, file) {
   $("recError").textContent = "";
-  try { await request(); $("recQuery").value = ""; $("recFile").value = ""; await loadRecs(); }
-  catch (e) { $("recError").textContent = e.message; }
+  $("recStatus").textContent = "Думаю…";
+  $("recBtn").disabled = true;
+  try {
+    const data = new FormData();
+    if (message) data.append("message", message);
+    if (file) data.append("file", file);
+    const res = await fetch("/api/v1/chat", { method: "POST", headers: { Authorization: `Bearer ${state.token}` }, body: data });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+    const result = await res.json();
+    $("recQuery").value = ""; $("recFile").value = "";
+    if (result.recommendation_id) await loadRecs();
+    else $("recList").prepend(el("div", {}, el("div", { className: "bubble me" }, message || "(файл)"), el("div", { className: "bubble" }, result.answer)));
+  } catch (e) { $("recError").textContent = e.message; }
+  $("recStatus").textContent = "";
+  $("recBtn").disabled = false;
 }
 
 async function submitAuth(register) {
@@ -299,33 +319,32 @@ $("authBtn").onclick = () => {
 $("loginBtn").onclick = () => submitAuth(false);
 $("registerBtn").onclick = () => submitAuth(true);
 $("recBtn").onclick = () => {
-  const query = $("recQuery").value.trim();
-  if (query) sendRec(() => api("/recommendations", { method: "POST", body: { query } }));
+  const message = $("recQuery").value.trim(), file = $("recFile").files[0];
+  if (message || file) sendChat(message, file);
 };
-$("recFile").onchange = () => {
-  const file = $("recFile").files[0];
-  if (!file) return;
-  const data = new FormData(); data.append("file", file);
-  sendRec(async () => {
-    const res = await fetch(API + "/recommendations/file", { method: "POST", headers: { Authorization: `Bearer ${state.token}` }, body: data });
-    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
-  });
+$("recFile").onchange = () => { if (!$("recQuery").value.trim()) sendChat("", $("recFile").files[0]); };
+$("micBtn").onclick = async () => {
+  if (state.recorder) { state.recorder.stop(); return; }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const chunks = [];
+    state.recorder = new MediaRecorder(stream);
+    state.recorder.ondataavailable = (e) => chunks.push(e.data);
+    state.recorder.onstop = () => {
+      stream.getTracks().forEach((t) => t.stop());
+      state.recorder = null;
+      $("micBtn").classList.remove("rec-on"); $("micBtn").textContent = "🎤 Голос";
+      sendChat("", new File(chunks, "voice.webm", { type: "audio/webm" }));
+    };
+    state.recorder.start();
+    $("micBtn").classList.add("rec-on"); $("micBtn").textContent = "■ Стоп";
+  } catch (e) { $("recError").textContent = "Нет доступа к микрофону: " + e.message; }
 };
 $("libStatus").replaceChildren(el("option", { value: "" }, "все"), ...Object.entries(STATUSES).map(([v, l]) => el("option", { value: v }, l)));
 $("libStatus").onchange = () => { state.libStatus = $("libStatus").value; state.offset = 0; loadBooks(); };
 $("prev").onclick = () => { state.offset = Math.max(0, state.offset - LIMIT); loadBooks(); };
 $("next").onclick = () => { state.offset += LIMIT; loadBooks(); };
 document.querySelectorAll("#tabs button").forEach((b) => b.onclick = () => { state.tab = b.dataset.tab; state.offset = 0; render(); });
-$("importBtn").onclick = async () => {
-  $("importBtn").disabled = true; $("status").textContent = "Импорт, подождите…";
-  try {
-    const r = await api("/books/import?count=100", { method: "POST" });
-    $("status").textContent = `Добавлено: ${r.imported}, уже были: ${r.skipped}`;
-    state.offset = 0; await loadBooks();
-  } catch (e) { $("status").textContent = e.message; }
-  $("importBtn").disabled = false;
-};
-
 loadMe().then(render);
 </script>
 </body>

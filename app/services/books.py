@@ -1,4 +1,3 @@
-import re
 from urllib.parse import quote_plus
 
 from fastapi import HTTPException, status
@@ -9,7 +8,7 @@ from app.core.config import settings
 from app.models import Book, BookTag, Favorite, Tag, TagVote, User, UserBook
 from app.schemas.book import BookListItem, TagOut
 
-TAG_NAME_PATTERN = re.compile(r"^[\w-]{2,40}$")
+MAX_TAG_LENGTH = 100
 
 
 def get_book_or_404(db: Session, book_id: int) -> Book:
@@ -20,15 +19,15 @@ def get_book_or_404(db: Session, book_id: int) -> Book:
 
 
 def normalize_tag_name(name: str) -> str:
-    normalized = "-".join(name.strip().lower().split())
-    if not TAG_NAME_PATTERN.match(normalized):
+    normalized = " ".join(name.lower().split())
+    if not 2 <= len(normalized) <= MAX_TAG_LENGTH or not normalized.isprintable():
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid tag name")
     return normalized
 
 
 def store_url(book: Book) -> str:
-    query = " ".join([book.title, *(a.name for a in book.authors)])
-    return settings.store_search_url.format(query=quote_plus(query))
+    query = f"{book.title} {book.author}"
+    return settings.STORE_SEARCH_URL.format(query=quote_plus(query))
 
 
 def to_list_items(db: Session, user: User | None, books: list[Book]) -> list[BookListItem]:
@@ -54,8 +53,7 @@ def to_list_items(db: Session, user: User | None, books: list[Book]) -> list[Boo
         BookListItem(
             id=b.id,
             title=b.title,
-            authors=[a.name for a in b.authors],
-            image_url=b.image_url,
+            author=b.author,
             is_favorite=b.id in favorites,
             status=entries[b.id].status if b.id in entries else None,  # type: ignore[arg-type]
             rating=entries[b.id].rating if b.id in entries else None,
@@ -87,4 +85,6 @@ def book_tags(db: Session, book_id: int, user: User | None) -> list[TagOut]:
                 )
             )
         }
-    return [TagOut(name=r.name, score=r.score, my_vote=my_votes.get(r.id, 0)) for r in rows]
+    return [
+        TagOut(id=r.id, name=r.name, score=r.score, my_vote=my_votes.get(r.id, 0)) for r in rows
+    ]

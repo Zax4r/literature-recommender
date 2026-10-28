@@ -5,7 +5,7 @@ import logging
 
 from openai import AsyncOpenAI
 
-from config import settings
+from app.core.config import settings
 
 logger = logging.getLogger("llm")
 

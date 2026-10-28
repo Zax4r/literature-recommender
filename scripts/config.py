@@ -79,7 +79,10 @@ METADATA_MODEL = (
 
 RAW_LISTS_DIR.mkdir(parents=True, exist_ok=True)
 GENERATED_JSONS_DIR.mkdir(parents=True, exist_ok=True)
-DATABASE_URL = os.environ.get("DATABASE_URL", "") or _env.get("DATABASE_URL", "")
+# Приложение использует SQLAlchemy-URL (postgresql+psycopg://), а psycopg принимает только postgresql://
+DATABASE_URL = (os.environ.get("DATABASE_URL", "") or _env.get("DATABASE_URL", "")).replace(
+    "postgresql+psycopg://", "postgresql://"
+)
 QDRANT_HOST = os.environ.get("QDRANT_HOST", "") or _env.get("QDRANT_HOST", "localhost")
 QDRANT_PORT = int(os.environ.get("QDRANT_PORT", "") or _env.get("QDRANT_PORT", "6333"))
 EMBEDDING_MODEL = "intfloat/multilingual-e5-base"

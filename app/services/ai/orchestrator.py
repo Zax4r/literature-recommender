@@ -6,7 +6,7 @@
 
 import logging
 
-from config import settings
+from app.core.config import settings
 from app.services.ai import context
 from app.services.ai.agents import book_shop_agent, extractor, formatter, router_agent
 from app.services.search import qdrant_search

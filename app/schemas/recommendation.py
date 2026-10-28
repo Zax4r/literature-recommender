@@ -1,24 +1,27 @@
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from app.schemas.book import BookListItem
 
 
-class RecommendationIn(BaseModel):
-    query: str = Field(min_length=1, max_length=2000)
+class StoreLink(BaseModel):
+    name: str
+    url: str
+    kind: str
 
 
 class RecommendationItemOut(BaseModel):
     book: BookListItem
     reason: str
-    store_url: str
+    stores: list[StoreLink]
 
 
 class RecommendationOut(BaseModel):
     id: int
     query: str
     source: str
+    answer: str
     created_at: datetime
     items: list[RecommendationItemOut]
 
