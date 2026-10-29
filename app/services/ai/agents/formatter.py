@@ -12,6 +12,7 @@ from app.services.ai.guard import parse_json_llm, wrap_untrusted
 logger = logging.getLogger("formatter")
 
 FORMATTER_PROMPT = (PROJECT_ROOT / "prompts" / "formatter_prompt.txt").read_text(encoding="utf-8")
+NO_MATCH_PROMPT = (PROJECT_ROOT / "prompts" / "no_match_prompt.txt").read_text(encoding="utf-8")
 
 
 def _cards_payload(cards: list[dict], stores_by_title: dict) -> list[dict]:
@@ -31,6 +32,14 @@ def _cards_payload(cards: list[dict], stores_by_title: dict) -> list[dict]:
 def _default_answer(cards: list[dict]) -> str:
     titles = ", ".join(f"«{c.get('title', '')}»" for c in cards)
     return f"По вашему запросу нашёл такие книги: {titles}. Подробнее — в карточках ниже."
+
+
+def _default_no_match() -> str:
+    return (
+        "К сожалению, в каталоге не нашлось книг, подходящих под этот запрос. "
+        "Попробуйте описать по-другому — жанр, настроение, место или время действия, "
+        "автора — и я постараюсь найти подходящее."
+    )
 
 
 def _is_echo(answer: str, summary: str) -> bool:
@@ -84,3 +93,37 @@ async def compose_answer(
     except Exception as exc:
         logger.warning("Formatter call failed: %s", exc)
     return _default_answer(cards)
+
+
+async def compose_no_match(
+    summary: str,
+    matched_genres: list[str] | None = None,
+    matched_tropes: list[str] | None = None,
+    matched_settings: list[str] | None = None,
+) -> str:
+    """Ответ, когда в каталоге нет подходящих книг: LLM пишет сама, из своих знаний.
+
+    «Ничего не нашлось» не должно быть тупиком: ассистент честно говорит, что в
+    каталоге по запросу пусто, и называет известные книги/авторов по теме либо
+    предлагает переформулировать запрос. Эхо запроса отсекается, как и в compose_answer."""
+    payload = {
+        "user_request": (summary or "")[:300],
+        "matched_genres": (matched_genres or [])[:8],
+        "matched_tropes": (matched_tropes or [])[:8],
+        "matched_settings": (matched_settings or [])[:8],
+    }
+    content = wrap_untrusted(json.dumps(payload, ensure_ascii=False), "данные запроса")
+
+    try:
+        raw = await chat_completion(
+            settings.FORMATTER_MODEL, NO_MATCH_PROMPT, content, json_mode=True, temperature=0.5
+        )
+        parsed = parse_json_llm(raw) or {}
+        answer = str(parsed.get("answer", "")).strip()
+        if answer and not _is_echo(answer, summary):
+            return answer
+        if answer:
+            logger.warning("No-match форматтер вернул эхо запроса; использую запасной ответ")
+    except Exception as exc:
+        logger.warning("No-match formatter call failed: %s", exc)
+    return _default_no_match()

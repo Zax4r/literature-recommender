@@ -6,6 +6,11 @@
   а форматтер повторяет её дословно вместо объяснения.
 """
 
+from unittest.mock import AsyncMock, patch
+
+import pytest
+
+from app.services.ai.agents import formatter as formatter_mod
 from app.services.ai.agents.formatter import _is_echo
 from app.services.ai.orchestrator import (
     build_search_query,
@@ -117,3 +122,35 @@ def test_extract_location_hints() -> None:
     assert extract_location_hints("события происходят в Петербурге") == ["Петербурге"]
     assert extract_location_hints("просто тёмное фэнтези") == []
     assert extract_location_hints("") == []
+
+
+@pytest.mark.anyio
+async def test_compose_no_match_uses_model_knowledge() -> None:
+    """Когда в каталоге пусто, модель отвечает сама — из своих знаний, а не эхом."""
+
+    async def fake_completion(*_: object, **__: object) -> str:
+        return (
+            '{"answer": "В каталоге пока нет таких книг. '
+            'По этой теме известны Джек Лондон и Джон Кракауэр."}'
+        )
+
+    with patch.object(
+        formatter_mod, "chat_completion", new=AsyncMock(side_effect=fake_completion)
+    ):
+        out = await formatter_mod.compose_no_match("события происходят на аляске")
+    assert "Кракауэр" in out or "кракауэр" in out
+
+
+@pytest.mark.anyio
+async def test_compose_no_match_blocks_echo() -> None:
+    """Эхо запроса от модели отбрасывается — пользователь видит запасной ответ."""
+
+    async def fake_echo(*_: object, **__: object) -> str:
+        return '{"answer": "события происходят на аляске"}'
+
+    with patch.object(
+        formatter_mod, "chat_completion", new=AsyncMock(side_effect=fake_echo)
+    ):
+        out = await formatter_mod.compose_no_match("события происходят на аляске")
+    assert "не нашлось" in out.lower()
+    assert "аляске" not in out.lower()

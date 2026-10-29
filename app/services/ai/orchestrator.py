@@ -289,10 +289,12 @@ async def run_chat(
         return base
 
     if intent == "clarify":
+        # Никогда не отвечаем словами пользователя: уточняющий вопрос строим сами,
+        # иначе слабая модель «пересказывает» запрос и ответ получается эхом без пользы.
         question = (
-            decision.get("user_summary")
-            or "Уточните, пожалуйста, что вы ищете: жанр, настроение, "
-            "или книга, на которую вы хотите что-то похожее?"
+            "Уточните, пожалуйста, чтобы я подобрал точнее: жанр (например, детектив "
+            "или фэнтези), настроение, место или время действия, автор — или книга, "
+            "похожую на которую вы ищете?"
         )
         base.update(_simple(intent, question, question=question))
         return base
@@ -408,13 +410,22 @@ async def run_chat(
     mark("search")
 
     if not cards:
-        base.update(
-            _simple(
-                "recommend",
-                "К сожалению, по вашему запросу ничего не нашлось. "
-                "Попробуйте описать иначе: жанр, настроение, автор, тропы.",
-            )
+        # В каталоге пусто по запросу — модель отвечает сама, из своих знаний:
+        # честно говорит, что подходящих книг нет, и подсказывает известные
+        # книги/авторов по теме или как переформулировать запрос.
+        answer = await _bounded(
+            formatter.compose_no_match(
+                summary,
+                matched_genres=meta["genres"],
+                matched_tropes=meta["tropes"],
+                matched_settings=meta["settings"],
+            ),
+            settings.AGENT_TIMEOUT_SECONDS,
+            formatter._default_no_match(),
+            label="formatter-no-match",
         )
+        mark("formatter")
+        base.update(_simple("recommend", answer, reason=decision.get("reason", "")))
         return base
 
     # Магазины и форматтер выполняются параллельно: тексту ответа ссылки не нужны.
