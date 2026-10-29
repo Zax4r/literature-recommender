@@ -17,6 +17,7 @@ from app.services.ai.orchestrator import (
     clean_summary,
     dialog_transcript,
     extract_location_hints,
+    is_similarity_request,
     last_user_query,
     prefer_settings,
     relevant_cards,
@@ -154,3 +155,18 @@ async def test_compose_no_match_blocks_echo() -> None:
         out = await formatter_mod.compose_no_match("события происходят на аляске")
     assert "не нашлось" in out.lower()
     assert "аляске" not in out.lower()
+
+
+def test_is_similarity_request() -> None:
+    """«Похожее на книгу X» — совпадение смысловое, гейт не применяем."""
+    assert is_similarity_request(
+        "Найти похожее по месту или сюжету Кристин Ханна «С жизнью наедине»"
+    )
+    assert is_similarity_request("похожее на Дюну")
+    assert is_similarity_request("что-то вроде «Мастера и Маргариты»")
+    assert is_similarity_request("аналог Литтл-Файр")
+    # Явные запросы признаков similarity не считаются.
+    assert not is_similarity_request("события происходят на аляске")
+    assert not is_similarity_request("тёмное фэнтези про драконов")
+    assert not is_similarity_request("посоветуй что-нибудь лёгкое")
+    assert not is_similarity_request("")

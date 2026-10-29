@@ -207,6 +207,32 @@ def extract_location_hints(text: str | None) -> list[str]:
     return out[:3]
 
 
+# Слова/обороты «похожего» запроса: тут совпадают по смыслу, а не по признакам.
+_SIMILARITY_RE = re.compile(
+    r"похож\w*|аналог|в духе|подобн|наподобие|такое как|что-то (?:такое|вроде)|в стиле",
+    re.IGNORECASE,
+)
+
+
+def _has_quoted_title(text: str) -> bool:
+    """«…» или \"…\" с многословным содержимым — похоже на название книги."""
+    for m in re.finditer(r"[«\"]([^»\"]{2,60})[»\"]", text):
+        title = m.group(1).strip()
+        if len(re.split(r"\s+", title)) >= 2 or len(title) >= 6:
+            return True
+    return False
+
+
+def is_similarity_request(text: str | None) -> bool:
+    """True, если запрос — «похожее на книгу/как X»: сравниваем смысл, а не жанры.
+
+    Для таких запросов гейт релевантности и фильтры по жанрам/местам отключаются,
+    иначе из похожих книг остаются только буквально совпавшие по словам."""
+    if not text:
+        return False
+    return bool(_SIMILARITY_RE.search(text)) or _has_quoted_title(text)
+
+
 def _base(user_text: str, untrusted_text: str | None, source: str) -> dict:
     return {
         "input": {
@@ -349,9 +375,17 @@ async def run_chat(
     # В поиск отдаём формулировку пользователя (или продолжение), а не пересказ роутера:
     # он точнее и не содержит шумовых преамбул.
     query_base = scope if (user_text or follow_up) else summary or untrusted_text or scope
-    query_text = build_search_query(
-        query_base.strip(), meta["genres"], meta["tropes"], meta["settings"]
-    ).strip()
+
+    # «Похожее на книгу X»: совпадение смысловое, а не по словам, поэтому
+    # гейт и фильтры по жанрам/местам не применяем и жанры/места не подмешиваем
+    # в поисковый запрос — ищем по самой формулировке.
+    similar = is_similarity_request(query_base) or is_similarity_request(user_text)
+    if similar:
+        query_text = (query_base or "").strip()[:500]
+    else:
+        query_text = build_search_query(
+            query_base.strip(), meta["genres"], meta["tropes"], meta["settings"]
+        ).strip()
 
     if not query_text:
         base.update(
@@ -389,24 +423,30 @@ async def run_chat(
             [],
             label="search-fallback",
         )
-    cards = prefer_settings(
-        prefer_genres(cards or [], meta["genres"]), meta["settings"]
-    )
-    checked = relevant_cards(
-        cards, genres=meta["genres"], tropes=meta["tropes"], settings_=meta["settings"]
-    )
-    if checked is None:
-        # Явных признаков экстрактор не нашёл — фильтровать нечем.
-        cards = cards[: settings.SEARCH_TOP_K]
-    elif checked:
-        cards = checked[: settings.SEARCH_TOP_K]
+    if similar:
+        # Не фильтруем литературными совпадениями: у подобных книг жанры/места
+        # могут не совпадать дословно с запросом. Отдаём топ поиска.
+        cards = (cards or [])[: settings.SEARCH_TOP_K]
     else:
-        # Признаки запроса были (жанр, место действия...), но ни одна книга каталога
-        # их не содержит. Не кормим форматтер нерелевантными карточками — честно говорим.
-        logger.info("no relevant cards for features: %s", _wanted_terms(
-            meta["genres"], meta["tropes"], meta["settings"]
-        ))
-        cards = []
+        cards = prefer_settings(
+            prefer_genres(cards or [], meta["genres"]), meta["settings"]
+        )
+        checked = relevant_cards(
+            cards, genres=meta["genres"], tropes=meta["tropes"], settings_=meta["settings"]
+        )
+        if checked is None:
+            # Явных признаков экстрактор не нашёл — фильтровать нечем.
+            cards = cards[: settings.SEARCH_TOP_K]
+        elif checked:
+            cards = checked[: settings.SEARCH_TOP_K]
+        else:
+            # Признаки запроса были (жанр, место действия...), но ни одна книга каталога
+            # их не содержит. Не кормим форматтер нерелевантными карточками — честно говорим.
+            logger.info(
+                "no relevant cards for features: %s",
+                _wanted_terms(meta["genres"], meta["tropes"], meta["settings"]),
+            )
+            cards = []
     mark("search")
 
     if not cards:
