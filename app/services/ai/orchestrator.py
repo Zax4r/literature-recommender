@@ -7,6 +7,7 @@
 
 import asyncio
 import logging
+import re
 import time
 from typing import Any
 
@@ -17,11 +18,26 @@ from app.services.search import qdrant_search
 
 logger = logging.getLogger("orchestrator")
 
+# Сколько последних сообщений диалога показываем агентам.
+HISTORY_CTX = 8
+
+# Шаблонные преамбулы, которыми слабые модели портят суть запроса
+# («Пользователь ищет книгу…» вместо «действия происходят на Аляске»).
+_SUMMARY_PREAMBLES = (
+    "пользователь ищет ",
+    "пользователь хочет ",
+    "пользователь просит ",
+    "the user is looking for ",
+    "the user wants ",
+    "the user is searching for ",
+)
+
 
 def build_search_query(
     summary: str | None,
     genres: list[str],
     tropes: list[str],
+    settings_: list[str] | None = None,
 ) -> str:
     parts = []
     if summary:
@@ -30,7 +46,41 @@ def build_search_query(
         parts.append("ЖАНРЫ: " + ", ".join(genres))
     if tropes:
         parts.append("ТРОПЫ: " + ", ".join(tropes))
+    if settings_:
+        parts.append("МЕСТО И ВРЕМЯ ДЕЙСТВИЯ: " + ", ".join(settings_))
     return " ".join(p for p in parts if p)
+
+
+def clean_summary(text: str | None) -> str:
+    """Суть запроса без шаблонных преамбул вида «Пользователь ищет …»."""
+    s = (text or "").strip()
+    low = s.lower()
+    for preamble in _SUMMARY_PREAMBLES:
+        if low.startswith(preamble):
+            s = s[len(preamble):].strip()
+            break
+    return s
+
+
+def dialog_transcript(history: list | None) -> str:
+    """История диалога одним текстом: роли заменены, содержание — данные."""
+    if not history:
+        return ""
+    lines = []
+    for m in history[-HISTORY_CTX:]:
+        if not isinstance(m, dict) or not str(m.get("content") or "").strip():
+            continue
+        role = "Пользователь" if m.get("role") == "user" else "Ассистент"
+        lines.append(f"{role}: {str(m.get('content') or '').strip()[:600]}")
+    return "\n".join(lines)
+
+
+def last_user_query(history: list | None) -> str:
+    """Последний пользовательский запрос из истории (для продолжений диалога)."""
+    for m in reversed(history or []):
+        if isinstance(m, dict) and m.get("role") == "user":
+            return str(m.get("content") or "").strip()[:1000]
+    return ""
 
 
 OVERFETCH = 5
@@ -50,6 +100,137 @@ def prefer_genres(cards: list[dict], genres: list[str]) -> list[dict]:
         if any(w in " ".join([*c.get("genres", []), *c.get("tropes", [])]).lower() for w in wanted)
     ]
     return matched or cards
+
+
+def _prefix_stem(word: str) -> str:
+    """Грубый «стем» — префикс слова достаточно длинный, чтобы ловить падежные
+    окончания («Аляска»/«Аляске»/«Аляскинский» → «аляс») и не давать ложных совпадений."""
+    w = word.strip().lower()
+    if not w:
+        return ""
+    return w[: max(4, len(w) - 2)]
+
+
+def prefer_settings(cards: list[dict], settings_: list[str]) -> list[dict]:
+    """Поднимает книги, у которых место/время действия из запроса есть в описании.
+
+    «Место действия» не хранится отдельным полем каталога, но почти всегда
+    встречается в описании книги (Аляска, Петербург, космос...). Поиск по
+    префиксу-«стему», чтобы не терять падежные формы."""
+    wanted = [w for w in (_prefix_stem(s) for s in settings_) if w]
+    if not wanted:
+        return cards
+    matched = [
+        c
+        for c in cards
+        if any(stem in (c.get("description") or "").lower() for stem in wanted)
+    ]
+    return matched or cards
+
+
+def card_text(card: dict) -> str:
+    """Все текстовые поля карточки в нижнем регистре — для проверки совпадений."""
+    fields = [
+        card.get("title"),
+        card.get("author"),
+        card.get("description"),
+        *(card.get("genres") or []),
+        *(card.get("tropes") or []),
+    ]
+    return " ".join(str(f) for f in fields if f).lower()
+
+
+def _wanted_terms(
+    genres: list[str],
+    tropes: list[str],
+    settings_: list[str],
+) -> list[str]:
+    """Признаки запроса одним списком слов/«стемов»: жанры, тропы, места действия."""
+    out: list[str] = []
+    for g in genres or []:
+        if g.strip():
+            out.append(g.strip().lower())
+    for t in tropes or []:
+        if t.strip():
+            out.append(t.strip().lower())
+    out.extend(_prefix_stem(s) for s in (settings_ or []))
+    return [w for w in out if w]
+
+
+def relevant_cards(
+    cards: list[dict],
+    *,
+    genres: list[str],
+    tropes: list[str],
+    settings_: list[str],
+) -> list[dict] | None:
+    """Оставляет только карточки со следами запрошенных признаков.
+
+    Гипотеза: Qdrant всегда возвращает top_k карточек даже при полном несовпадении,
+    а форматтер в этом случае вместо честного «ничего не нашлось» начинает
+    повторять запрос. Гейт: если явные признаки были извлечены, но ни одна книга
+    их не содержит — вернуть пустой список (оркестратор ответит честно).
+    None — явных признаков в запросе не было, фильтр не применять."""
+    wanted = _wanted_terms(genres, tropes, settings_)
+    if not wanted:
+        return None
+    return [c for c in cards if any(w in card_text(c) for w in wanted)]
+
+
+_LOCATION_PATTERNS = (
+    re.compile(
+        r"(?:действия|действие|события|событие|история|сюжет)\s+"
+        r"(?:происходят|происходит|разворачиваются|разворачивается)\s+"
+        r"(?:в|на)\s+([а-яёa-z][а-яёa-z-]{2,})",
+        flags=re.IGNORECASE,
+    ),
+    re.compile(r"где[- ]то\s+(?:в|на)\s+([а-яёa-z][а-яёa-z-]{2,})"),
+)
+
+
+def extract_location_hints(text: str | None) -> list[str]:
+    """Локации из запроса вида «действия происходят на Аляске» — без LLM.
+
+    Страховка на случай, когда модель-экстрактор не заполнила settings:
+    место действия всё равно попадает в поиск и в гейт релевантности."""
+    if not text:
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for pattern in _LOCATION_PATTERNS:
+        for m in pattern.finditer(text):
+            word = m.group(1)
+            key = word.lower()
+            if key not in seen:
+                seen.add(key)
+                out.append(word)
+    return out[:3]
+
+
+# Слова/обороты «похожего» запроса: тут совпадают по смыслу, а не по признакам.
+_SIMILARITY_RE = re.compile(
+    r"похож\w*|аналог|в духе|подобн|наподобие|такое как|что-то (?:такое|вроде)|в стиле",
+    re.IGNORECASE,
+)
+
+
+def _has_quoted_title(text: str) -> bool:
+    """«…» или \"…\" с многословным содержимым — похоже на название книги."""
+    for m in re.finditer(r"[«\"]([^»\"]{2,60})[»\"]", text):
+        title = m.group(1).strip()
+        if len(re.split(r"\s+", title)) >= 2 or len(title) >= 6:
+            return True
+    return False
+
+
+def is_similarity_request(text: str | None) -> bool:
+    """True, если запрос — «похожее на книгу/как X»: сравниваем смысл, а не жанры.
+
+    Для таких запросов гейт релевантности и фильтры по жанрам/местам отключаются,
+    иначе из похожих книг остаются только буквально совпавшие по словам."""
+    if not text:
+        return False
+    return bool(_SIMILARITY_RE.search(text)) or _has_quoted_title(text)
 
 
 def _base(user_text: str, untrusted_text: str | None, source: str) -> dict:
@@ -93,10 +274,10 @@ async def run_chat(
     user_id: str | None = None,
     history: list | None = None,
 ) -> dict:
+    history = history or []
     base = _base(user_text, untrusted_text, source)
-    full_input = "\n".join(
-        p for p in (user_text or "", untrusted_text or "") if p
-    )
+    full_input = "\n".join(p for p in (user_text or "", untrusted_text or "") if p)
+    dialog = dialog_transcript(history) or ""
 
     t_start = time.perf_counter()
     timings: dict[str, int] = {}
@@ -105,7 +286,9 @@ async def run_chat(
         timings[name] = int((time.perf_counter() - t_start) * 1000)
 
     decision = await _bounded(
-        router_agent.route_request(full_input or "(пусто)", has_history=bool(history)),
+        router_agent.route_request(
+            full_input or "(пусто)", history=dialog, has_history=bool(history)
+        ),
         settings.AGENT_TIMEOUT_SECONDS,
         {
             "intent": "recommend",
@@ -132,34 +315,77 @@ async def run_chat(
         return base
 
     if intent == "clarify":
+        # Никогда не отвечаем словами пользователя: уточняющий вопрос строим сами,
+        # иначе слабая модель «пересказывает» запрос и ответ получается эхом без пользы.
         question = (
-            decision.get("user_summary")
-            or "Уточните, пожалуйста, что вы ищете: жанр, настроение, "
-            "или книга, на которую вы хотите что-то похожее?"
+            "Уточните, пожалуйста, чтобы я подобрал точнее: жанр (например, детектив "
+            "или фэнтези), настроение, место или время действия, автор — или книга, "
+            "похожую на которую вы ищете?"
         )
         base.update(_simple(intent, question, question=question))
         return base
 
-    if intent == "follow_up":
-        base.update(
-            _simple(
-                intent,
-                "Могу продолжить подбор. Опишите направление — жанр, автор, "
-                "настроение — и я поищу похожие книги.",
+    # --- продолжение диалога: ищем по теме из истории + текущему уточнению ---
+    follow_up = intent == "follow_up"
+    if follow_up:
+        prior = clean_summary(decision.get("user_summary")) or last_user_query(history)
+        scope = " ".join(p for p in (prior, user_text or "") if p).strip()[:2000]
+        if not scope:
+            base.update(
+                _simple(
+                    intent,
+                    "Могу продолжить подбор. Опишите направление — жанр, автор, "
+                    "настроение — и я поищу похожие книги.",
+                )
             )
-        )
-        return base
+            return base
+    else:
+        scope = user_text
 
     # --- recommend ---
     meta = await _bounded(
-        extractor.extract_metadata(user_text, untrusted_text),
+        extractor.extract_metadata(scope, untrusted_text, history=dialog),
         settings.AGENT_TIMEOUT_SECONDS,
-        {"genres": [], "tropes": [], "exclude": []},
+        {"genres": [], "tropes": [], "settings": [], "exclude": []},
         label="extractor",
     )
     mark("extractor")
-    summary = decision.get("user_summary") or user_text or untrusted_text or ""
-    query_text = build_search_query(summary, meta["genres"], meta["tropes"]).strip()
+
+    # Страховка: место действия вида «действия/события происходят на …» вытаскиваем
+    # и без LLM-экстрактора, если он вернул пустой settings (короткое типизированное
+    # сообщение, без файла).
+    if not meta["settings"] and user_text and not untrusted_text and len(user_text.strip()) <= 300:
+        meta["settings"] = extract_location_hints(user_text)
+
+    # Суть запроса для форматтера: свои слова пользователя, если они короткие,
+    # иначе пересказ роутера (очищенный от «Пользователь ищет…»).
+    if follow_up:
+        summary = scope[:300]
+    elif user_text and len(user_text.strip()) <= 300:
+        summary = user_text.strip()
+    else:
+        summary = (
+            clean_summary(decision.get("user_summary"))
+            or user_text
+            or untrusted_text
+            or scope
+        )
+    summary = summary[:300]
+
+    # В поиск отдаём формулировку пользователя (или продолжение), а не пересказ роутера:
+    # он точнее и не содержит шумовых преамбул.
+    query_base = scope if (user_text or follow_up) else summary or untrusted_text or scope
+
+    # «Похожее на книгу X»: совпадение смысловое, а не по словам, поэтому
+    # гейт и фильтры по жанрам/местам не применяем и жанры/места не подмешиваем
+    # в поисковый запрос — ищем по самой формулировке.
+    similar = is_similarity_request(query_base) or is_similarity_request(user_text)
+    if similar:
+        query_text = (query_base or "").strip()[:500]
+    else:
+        query_text = build_search_query(
+            query_base.strip(), meta["genres"], meta["tropes"], meta["settings"]
+        ).strip()
 
     if not query_text:
         base.update(
@@ -197,22 +423,61 @@ async def run_chat(
             [],
             label="search-fallback",
         )
-    cards = prefer_genres(cards or [], meta["genres"])[: settings.SEARCH_TOP_K]
+    if similar:
+        # Не фильтруем литературными совпадениями: у подобных книг жанры/места
+        # могут не совпадать дословно с запросом. Отдаём топ поиска.
+        cards = (cards or [])[: settings.SEARCH_TOP_K]
+    else:
+        cards = prefer_settings(
+            prefer_genres(cards or [], meta["genres"]), meta["settings"]
+        )
+        checked = relevant_cards(
+            cards, genres=meta["genres"], tropes=meta["tropes"], settings_=meta["settings"]
+        )
+        if checked is None:
+            # Явных признаков экстрактор не нашёл — фильтровать нечем.
+            cards = cards[: settings.SEARCH_TOP_K]
+        elif checked:
+            cards = checked[: settings.SEARCH_TOP_K]
+        else:
+            # Признаки запроса были (жанр, место действия...), но ни одна книга каталога
+            # их не содержит. Не кормим форматтер нерелевантными карточками — честно говорим.
+            logger.info(
+                "no relevant cards for features: %s",
+                _wanted_terms(meta["genres"], meta["tropes"], meta["settings"]),
+            )
+            cards = []
     mark("search")
 
     if not cards:
-        base.update(
-            _simple(
-                "recommend",
-                "К сожалению, по вашему запросу ничего не нашлось. "
-                "Попробуйте описать иначе: жанр, настроение, автор, тропы.",
-            )
+        # В каталоге пусто по запросу — модель отвечает сама, из своих знаний:
+        # честно говорит, что подходящих книг нет, и подсказывает известные
+        # книги/авторов по теме или как переформулировать запрос.
+        answer = await _bounded(
+            formatter.compose_no_match(
+                summary,
+                matched_genres=meta["genres"],
+                matched_tropes=meta["tropes"],
+                matched_settings=meta["settings"],
+            ),
+            settings.AGENT_TIMEOUT_SECONDS,
+            formatter._default_no_match(),
+            label="formatter-no-match",
         )
+        mark("formatter")
+        base.update(_simple("recommend", answer, reason=decision.get("reason", "")))
         return base
 
     # Магазины и форматтер выполняются параллельно: тексту ответа ссылки не нужны.
     formatter_task = asyncio.create_task(
-        formatter.compose_answer(cards, {}, decision.get("user_summary") or "", meta["tropes"])
+        formatter.compose_answer(
+            cards,
+            {},
+            summary,
+            matched_genres=meta["genres"],
+            matched_tropes=meta["tropes"],
+            matched_settings=meta["settings"],
+        )
     )
     stores_by_title: dict[str, list[dict]] = {}
     with_stores = await _bounded(
@@ -257,6 +522,7 @@ async def run_chat(
             "matched": {
                 "genres": meta["genres"],
                 "tropes": meta["tropes"],
+                "settings": meta["settings"],
                 "exclude": meta["exclude"],
             },
             "reason": decision.get("reason", ""),

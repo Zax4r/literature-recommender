@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 
 from app.core.config import settings
 from app.services.ai import PROJECT_ROOT
@@ -11,6 +12,7 @@ from app.services.ai.guard import parse_json_llm, wrap_untrusted
 logger = logging.getLogger("formatter")
 
 FORMATTER_PROMPT = (PROJECT_ROOT / "prompts" / "formatter_prompt.txt").read_text(encoding="utf-8")
+NO_MATCH_PROMPT = (PROJECT_ROOT / "prompts" / "no_match_prompt.txt").read_text(encoding="utf-8")
 
 
 def _cards_payload(cards: list[dict], stores_by_title: dict) -> list[dict]:
@@ -32,11 +34,38 @@ def _default_answer(cards: list[dict]) -> str:
     return f"По вашему запросу нашёл такие книги: {titles}. Подробнее — в карточках ниже."
 
 
+def _default_no_match() -> str:
+    return (
+        "К сожалению, в каталоге не нашлось книг, подходящих под этот запрос. "
+        "Попробуйте описать по-другому — жанр, настроение, место или время действия, "
+        "автора — и я постараюсь найти подходящее."
+    )
+
+
+def _is_echo(answer: str, summary: str) -> bool:
+    """True, если ответ LLM — по сути дословный повтор summary (типичный сбой модели:
+    вместо объяснения она копирует суть запроса вида «Пользователь ищет книгу…»)."""
+    if not answer or not summary:
+        return False
+
+    def norm(s: str) -> str:
+        return re.sub(r"\s+", " ", s).strip().strip('"\'!?.,;:«» ').lower()
+
+    a, s = norm(answer), norm(summary)
+    if not a or not s:
+        return False
+    if a == s or a in s:
+        return True
+    return s in a and len(s) / len(a) > 0.6
+
+
 async def compose_answer(
     cards: list[dict],
     stores_by_title: dict,
     summary: str,
-    matched_tropes: list[str],
+    matched_genres: list[str] | None = None,
+    matched_tropes: list[str] | None = None,
+    matched_settings: list[str] | None = None,
 ) -> str:
     """Возвращает связный текстовый ответ. LLM НЕ получает сырой ввод пользователя."""
     if not cards:
@@ -44,7 +73,9 @@ async def compose_answer(
 
     payload = {
         "user_summary": (summary or "")[:300],
-        "matched_tropes": matched_tropes[:8],
+        "matched_genres": (matched_genres or [])[:8],
+        "matched_tropes": (matched_tropes or [])[:8],
+        "matched_settings": (matched_settings or [])[:8],
         "books": _cards_payload(cards, stores_by_title),
     }
     content = wrap_untrusted(json.dumps(payload, ensure_ascii=False), "данные рекомендаций")
@@ -55,7 +86,44 @@ async def compose_answer(
         )
         parsed = parse_json_llm(raw) or {}
         answer = str(parsed.get("answer", "")).strip()
-        return answer or _default_answer(cards)
+        if answer and not _is_echo(answer, summary):
+            return answer
+        if answer:
+            logger.warning("Formatter вернул эхо запроса; использую запасной ответ")
     except Exception as exc:
         logger.warning("Formatter call failed: %s", exc)
-        return _default_answer(cards)
+    return _default_answer(cards)
+
+
+async def compose_no_match(
+    summary: str,
+    matched_genres: list[str] | None = None,
+    matched_tropes: list[str] | None = None,
+    matched_settings: list[str] | None = None,
+) -> str:
+    """Ответ, когда в каталоге нет подходящих книг: LLM пишет сама, из своих знаний.
+
+    «Ничего не нашлось» не должно быть тупиком: ассистент честно говорит, что в
+    каталоге по запросу пусто, и называет известные книги/авторов по теме либо
+    предлагает переформулировать запрос. Эхо запроса отсекается, как и в compose_answer."""
+    payload = {
+        "user_request": (summary or "")[:300],
+        "matched_genres": (matched_genres or [])[:8],
+        "matched_tropes": (matched_tropes or [])[:8],
+        "matched_settings": (matched_settings or [])[:8],
+    }
+    content = wrap_untrusted(json.dumps(payload, ensure_ascii=False), "данные запроса")
+
+    try:
+        raw = await chat_completion(
+            settings.FORMATTER_MODEL, NO_MATCH_PROMPT, content, json_mode=True, temperature=0.5
+        )
+        parsed = parse_json_llm(raw) or {}
+        answer = str(parsed.get("answer", "")).strip()
+        if answer and not _is_echo(answer, summary):
+            return answer
+        if answer:
+            logger.warning("No-match форматтер вернул эхо запроса; использую запасной ответ")
+    except Exception as exc:
+        logger.warning("No-match formatter call failed: %s", exc)
+    return _default_no_match()

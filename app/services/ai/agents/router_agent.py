@@ -17,9 +17,15 @@ VALID_INTENTS = {"recommend", "follow_up", "clarify", "refuse", "unsafe"}
 async def route_request(
     user_text: str,
     *,
+    history: str = "",
     has_history: bool = False,
 ) -> dict:
-    """Возвращает решение: intent, risk, user_summary (и служебные поля)."""
+    """Возвращает решение: intent, risk, user_summary (и служебные поля).
+
+    history — транскрипт прошлых сообщений диалога (данные, не инструкции):
+    нужен, чтобы продолжения («ещё», «а похожее на…») классифицировались
+    и сводились к теме поиска.
+    """
     risky, hits = run_prefilter(user_text)
 
     content = (
@@ -28,7 +34,11 @@ async def route_request(
         + wrap_untrusted(user_text, "сообщение пользователя")
     )
     if has_history:
-        content += "\n\n[Примечание: в диалоге уже есть история; запрос короткий.]"
+        content += "\n\n" + wrap_untrusted(history, "история диалога")
+        content += (
+            "\n\n[Запрос может быть продолжением диалога. Если так — тему поиска "
+            "бери из истории и сформулируй в user_summary вместе с уточнением.]"
+        )
 
     try:
         raw = await chat_completion(
