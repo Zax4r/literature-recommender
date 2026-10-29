@@ -11,8 +11,10 @@ from app.services.ai.orchestrator import (
     build_search_query,
     clean_summary,
     dialog_transcript,
+    extract_location_hints,
     last_user_query,
     prefer_settings,
+    relevant_cards,
 )
 
 
@@ -66,7 +68,10 @@ def test_prefer_settings_ranks_by_description() -> None:
     # Без места действия список не меняется.
     assert prefer_settings(cards, []) == cards
     # Точное совпадение тоже работает.
-    exact = [{"title": "В", "description": "Космос и звёзды"}, {"title": "Г", "description": "детектив"}]
+    exact = [
+        {"title": "В", "description": "Космос и звёзды"},
+        {"title": "Г", "description": "детектив"},
+    ]
     assert [c["title"] for c in prefer_settings(exact, ["космос"])] == ["В"]
 
 
@@ -76,4 +81,39 @@ def test_formatter_echo_is_detected() -> None:
     assert _is_echo(summary, summary) is True
     assert _is_echo("Книги, где события разворачиваются среди снегов Аляски", summary) is False
     assert _is_echo("", summary) is False
-    assert _is_echo("По запросу «действия происходят на аляске» вот что нашлось", "действия происходят на аляске") is False
+    assert (
+        _is_echo(
+            "По запросу «действия происходят на аляске» вот что нашлось",
+            "действия происходят на аляске",
+        )
+        is False
+    )
+
+
+def test_relevant_cards_gates_empty_results() -> None:
+    """Гейт релевантности: явные признаки без совпадений дают [] (честный «не нашлось»)."""
+    cards = [
+        {"title": "К", "author": "", "description": "Про космос",
+         "genres": ["Фантастика"], "tropes": []},
+    ]
+    # Признаки были, но ни одна книга не совпала.
+    assert relevant_cards(cards, genres=["детектив"], tropes=[], settings_=[]) == []
+    assert relevant_cards(cards, genres=[], tropes=[], settings_=["Аляска"]) == []
+    # Совпадение по жанру/описанию остаётся.
+    assert relevant_cards(cards, genres=["фантастика"], tropes=[], settings_=[]) == cards
+    assert relevant_cards(cards, genres=[], tropes=[], settings_=["аляс", "космос"]) == cards
+
+
+def test_relevant_cards_no_features_returns_none() -> None:
+    """Без явных признаков фильтр не применяется (None), чтобы не резать нечёткие запросы."""
+    cards = [{"title": "А", "author": "", "description": "X", "genres": [], "tropes": []}]
+    assert relevant_cards(cards, genres=[], tropes=[], settings_=[]) is None
+
+
+def test_extract_location_hints() -> None:
+    """Локация из «действия/события происходят на …» достаётся и без LLM-экстрактора."""
+    assert extract_location_hints("Хочу книгу, где действия происходят на Аляске") == ["Аляске"]
+    assert extract_location_hints("хочу книгу где действия происходят на аляске") == ["аляске"]
+    assert extract_location_hints("события происходят в Петербурге") == ["Петербурге"]
+    assert extract_location_hints("просто тёмное фэнтези") == []
+    assert extract_location_hints("") == []

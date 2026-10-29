@@ -7,6 +7,7 @@
 
 import asyncio
 import logging
+import re
 import time
 from typing import Any
 
@@ -127,6 +128,85 @@ def prefer_settings(cards: list[dict], settings_: list[str]) -> list[dict]:
     return matched or cards
 
 
+def card_text(card: dict) -> str:
+    """Все текстовые поля карточки в нижнем регистре — для проверки совпадений."""
+    fields = [
+        card.get("title"),
+        card.get("author"),
+        card.get("description"),
+        *(card.get("genres") or []),
+        *(card.get("tropes") or []),
+    ]
+    return " ".join(str(f) for f in fields if f).lower()
+
+
+def _wanted_terms(
+    genres: list[str],
+    tropes: list[str],
+    settings_: list[str],
+) -> list[str]:
+    """Признаки запроса одним списком слов/«стемов»: жанры, тропы, места действия."""
+    out: list[str] = []
+    for g in genres or []:
+        if g.strip():
+            out.append(g.strip().lower())
+    for t in tropes or []:
+        if t.strip():
+            out.append(t.strip().lower())
+    out.extend(_prefix_stem(s) for s in (settings_ or []))
+    return [w for w in out if w]
+
+
+def relevant_cards(
+    cards: list[dict],
+    *,
+    genres: list[str],
+    tropes: list[str],
+    settings_: list[str],
+) -> list[dict] | None:
+    """Оставляет только карточки со следами запрошенных признаков.
+
+    Гипотеза: Qdrant всегда возвращает top_k карточек даже при полном несовпадении,
+    а форматтер в этом случае вместо честного «ничего не нашлось» начинает
+    повторять запрос. Гейт: если явные признаки были извлечены, но ни одна книга
+    их не содержит — вернуть пустой список (оркестратор ответит честно).
+    None — явных признаков в запросе не было, фильтр не применять."""
+    wanted = _wanted_terms(genres, tropes, settings_)
+    if not wanted:
+        return None
+    return [c for c in cards if any(w in card_text(c) for w in wanted)]
+
+
+_LOCATION_PATTERNS = (
+    re.compile(
+        r"(?:действия|действие|события|событие|история|сюжет)\s+"
+        r"(?:происходят|происходит|разворачиваются|разворачивается)\s+"
+        r"(?:в|на)\s+([а-яёa-z][а-яёa-z-]{2,})",
+        flags=re.IGNORECASE,
+    ),
+    re.compile(r"где[- ]то\s+(?:в|на)\s+([а-яёa-z][а-яёa-z-]{2,})"),
+)
+
+
+def extract_location_hints(text: str | None) -> list[str]:
+    """Локации из запроса вида «действия происходят на Аляске» — без LLM.
+
+    Страховка на случай, когда модель-экстрактор не заполнила settings:
+    место действия всё равно попадает в поиск и в гейт релевантности."""
+    if not text:
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for pattern in _LOCATION_PATTERNS:
+        for m in pattern.finditer(text):
+            word = m.group(1)
+            key = word.lower()
+            if key not in seen:
+                seen.add(key)
+                out.append(word)
+    return out[:3]
+
+
 def _base(user_text: str, untrusted_text: str | None, source: str) -> dict:
     return {
         "input": {
@@ -243,6 +323,12 @@ async def run_chat(
     )
     mark("extractor")
 
+    # Страховка: место действия вида «действия/события происходят на …» вытаскиваем
+    # и без LLM-экстрактора, если он вернул пустой settings (короткое типизированное
+    # сообщение, без файла).
+    if not meta["settings"] and user_text and not untrusted_text and len(user_text.strip()) <= 300:
+        meta["settings"] = extract_location_hints(user_text)
+
     # Суть запроса для форматтера: свои слова пользователя, если они короткие,
     # иначе пересказ роутера (очищенный от «Пользователь ищет…»).
     if follow_up:
@@ -303,7 +389,22 @@ async def run_chat(
         )
     cards = prefer_settings(
         prefer_genres(cards or [], meta["genres"]), meta["settings"]
-    )[: settings.SEARCH_TOP_K]
+    )
+    checked = relevant_cards(
+        cards, genres=meta["genres"], tropes=meta["tropes"], settings_=meta["settings"]
+    )
+    if checked is None:
+        # Явных признаков экстрактор не нашёл — фильтровать нечем.
+        cards = cards[: settings.SEARCH_TOP_K]
+    elif checked:
+        cards = checked[: settings.SEARCH_TOP_K]
+    else:
+        # Признаки запроса были (жанр, место действия...), но ни одна книга каталога
+        # их не содержит. Не кормим форматтер нерелевантными карточками — честно говорим.
+        logger.info("no relevant cards for features: %s", _wanted_terms(
+            meta["genres"], meta["tropes"], meta["settings"]
+        ))
+        cards = []
     mark("search")
 
     if not cards:
