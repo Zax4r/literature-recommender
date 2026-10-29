@@ -1,4 +1,4 @@
-"""Агент-экстрактор: из текста пользователя достаёт жанры/тропы/исключения."""
+"""Агент-экстрактор: из текста пользователя достаёт жанры/тропы/место действия/исключения."""
 
 import logging
 
@@ -15,17 +15,21 @@ EXTRACTOR_PROMPT = (PROJECT_ROOT / "prompts" / "extractor_prompt.txt").read_text
 async def extract_metadata(
     user_text: str | None,
     untrusted_text: str | None = None,
+    history: str = "",
 ) -> dict:
-    """Возвращает {"genres": [...], "tropes": [...], "exclude": [...]}.
+    """Возвращает {"genres": [...], "tropes": [...], "settings": [...], "exclude": [...]}.
 
     user_text — сообщение пользователя; untrusted_text — содержимое файла/аудио
-    (оборачивается как недоверенные данные).
+    (оборачивается как недоверенные данные); history — транскрипт диалога для
+    коротких сообщений-продолжений.
     """
     parts: list[str] = []
     if user_text:
         parts.append(f"Сообщение пользователя:\n{user_text}")
     if untrusted_text:
         parts.append("\n\n" + wrap_untrusted(untrusted_text, "вложение (файл/аудио)"))
+    if history:
+        parts.append("\n\n" + wrap_untrusted(history, "история диалога"))
     content = "\n\n".join(parts) or "(пустой запрос)"
 
     try:
@@ -40,5 +44,6 @@ async def extract_metadata(
     return {
         "genres": clean_string_list(parsed.get("genres")),
         "tropes": clean_string_list(parsed.get("tropes")),
+        "settings": clean_string_list(parsed.get("settings"), max_items=8, max_chars=80),
         "exclude": clean_string_list(parsed.get("exclude"), max_items=8, max_chars=80),
     }
