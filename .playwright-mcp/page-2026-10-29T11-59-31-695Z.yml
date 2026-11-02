@@ -1,0 +1,34 @@
+- generic [ref=e2]:
+  - banner [ref=e3]:
+    - heading "📚 Литература" [level=1] [ref=e4]:
+      - generic [ref=e5]: 📚
+      - generic [ref=e6]: Литература
+    - navigation [ref=e7]:
+      - button "Чат" [active] [ref=e109] [cursor=pointer]
+      - button "Лента" [ref=e8] [cursor=pointer]
+      - button "Избранное" [ref=e110] [cursor=pointer]
+      - button "Библиотека" [ref=e111] [cursor=pointer]
+      - button "Рекомендации" [ref=e112] [cursor=pointer]
+    - generic [ref=e113]: claude_tester
+    - button "Выйти" [ref=e114] [cursor=pointer]
+  - main [ref=e206]:
+    - generic [ref=e207]:
+      - complementary [ref=e208]:
+        - button "+ Новый чат" [ref=e209] [cursor=pointer]
+        - list [ref=e210]:
+          - listitem [ref=e211]: Пока нет сохранённых чатов
+      - generic [ref=e212]:
+        - generic [ref=e214]:
+          - generic [aria-hidden] [ref=e215]: 📖
+          - generic [aria-hidden] [ref=e216]: ✨
+          - heading "Что почитаем?" [level=2] [ref=e217]
+          - paragraph [ref=e218]: "Расскажите, какую книгу вы ищете: жанр, настроение или похожая история."
+          - generic [ref=e219]:
+            - button "Уютное фэнтези про магию и дружбу" [ref=e220] [cursor=pointer]
+            - button "Детектив с неожиданной развязкой" [ref=e221] [cursor=pointer]
+            - button "Научная фантастика про космос" [ref=e222] [cursor=pointer]
+            - button "Что-нибудь лёгкое на вечер" [ref=e223] [cursor=pointer]
+        - generic [ref=e225]:
+          - generic "Прикрепить файл" [ref=e226] [cursor=pointer]: 📎
+          - textbox "Что хотите почитать?" [ref=e227]
+          - button "Отправить" [disabled] [ref=e228]

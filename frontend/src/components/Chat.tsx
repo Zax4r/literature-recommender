@@ -23,7 +23,9 @@ export default function Chat() {
   const [typingId, setTypingId] = useState<number | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [openId, setOpenId] = useState<number | null>(null);
+  const [recording, setRecording] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
+  const recorder = useRef<MediaRecorder | null>(null);
 
   const loadSessions = useCallback(async () => {
     setSessions(await api<ChatSession[]>("/chat/sessions"));
@@ -93,6 +95,31 @@ export default function Chat() {
     }
     setSending(false);
     loadSessions();
+  }
+
+  async function toggleRecording() {
+    if (recorder.current) {
+      recorder.current.stop();
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const rec = new MediaRecorder(stream);
+      const chunks: Blob[] = [];
+      rec.ondataavailable = (e) => chunks.push(e.data);
+      rec.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        recorder.current = null;
+        setRecording(false);
+        if (chunks.length) setFile(new File(chunks, "voice.webm", { type: rec.mimeType }));
+      };
+      rec.start();
+      recorder.current = rec;
+      setRecording(true);
+      setError("");
+    } catch {
+      setError("Нет доступа к микрофону");
+    }
   }
 
   function onKey(e: KeyboardEvent) {
@@ -182,6 +209,17 @@ export default function Chat() {
                 onChange={(e) => { setFile(e.target.files?.[0] ?? null); e.target.value = ""; }}
               />
             </label>
+            {typeof MediaRecorder !== "undefined" && (
+              <button
+                type="button"
+                className={"mic" + (recording ? " rec" : "")}
+                title={recording ? "Остановить запись" : "Голосовой ввод"}
+                onClick={toggleRecording}
+                disabled={sending}
+              >
+                🎤
+              </button>
+            )}
             <textarea
               rows={1}
               value={draft}

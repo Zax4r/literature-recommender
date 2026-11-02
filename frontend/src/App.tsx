@@ -3,16 +3,14 @@ import Auth from "./components/Auth";
 import Books from "./components/Books";
 import Chat from "./components/Chat";
 import Hero from "./components/Hero";
-import Recs from "./components/Recs";
 import { useAuth } from "./lib/auth";
 
-type Tab = "chat" | "feed" | "favorites" | "library" | "recs";
+type Tab = "chat" | "feed" | "favorites" | "library";
 const TABS: [Tab, string][] = [
   ["chat", "Чат"],
   ["feed", "Лента"],
   ["favorites", "Избранное"],
   ["library", "Библиотека"],
-  ["recs", "Рекомендации"],
 ];
 
 export default function App() {
@@ -31,7 +29,6 @@ export default function App() {
   let view;
   if (authMode && !me) view = <Auth mode={authMode} onMode={setAuthMode} />;
   else if (tab === "chat" && me) view = <Chat />;
-  else if (tab === "recs" && me) view = <div className="page"><Recs /></div>;
   else {
     const kind = tab === "favorites" || tab === "library" ? tab : "feed";
     view = (

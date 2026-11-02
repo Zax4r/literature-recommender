@@ -1,0 +1,116 @@
+- generic [ref=e2]:
+  - banner [ref=e3]:
+    - heading "📚 Литература" [level=1] [ref=e4]:
+      - generic [ref=e5]: 📚
+      - generic [ref=e6]: Литература
+    - navigation [ref=e7]:
+      - button "Чат" [ref=e109] [cursor=pointer]
+      - button "Лента" [ref=e8] [cursor=pointer]
+      - button "Избранное" [ref=e110] [cursor=pointer]
+      - button "Библиотека" [ref=e111] [cursor=pointer]
+      - button "Рекомендации" [ref=e112] [cursor=pointer]
+    - generic [ref=e113]: claude_tester
+    - button "Выйти" [ref=e114] [cursor=pointer]
+  - main [ref=e115]:
+    - generic [ref=e116]:
+      - generic [ref=e117]:
+        - button "G Gilead Gilead Marilynne Robinson ♡" [ref=e118] [cursor=pointer]:
+          - generic [ref=e119]:
+            - text: G
+            - generic [ref=e120]: Gilead
+          - generic [ref=e121]:
+            - generic [ref=e122]: Gilead
+            - generic [ref=e123]: Marilynne Robinson
+          - button "♡" [ref=e124]
+        - button "S Spider's Web Spider's Web Charles Osborne, Agatha Christie ♡" [ref=e125] [cursor=pointer]:
+          - generic [ref=e126]:
+            - text: S
+            - generic [ref=e127]: Spider's Web
+          - generic [ref=e128]:
+            - generic [ref=e129]: Spider's Web
+            - generic [ref=e130]: Charles Osborne, Agatha Christie
+          - button "♡" [ref=e131]
+        - button "T The One Tree The One Tree Stephen R. Donaldson ♡" [ref=e132] [cursor=pointer]:
+          - generic [ref=e133]:
+            - text: T
+            - generic [ref=e134]: The One Tree
+          - generic [ref=e135]:
+            - generic [ref=e136]: The One Tree
+            - generic [ref=e137]: Stephen R. Donaldson
+          - button "♡" [ref=e138]
+        - button "R Rage of angels Rage of angels Sidney Sheldon ♡" [ref=e139] [cursor=pointer]:
+          - generic [ref=e140]:
+            - text: R
+            - generic [ref=e141]: Rage of angels
+          - generic [ref=e142]:
+            - generic [ref=e143]: Rage of angels
+            - generic [ref=e144]: Sidney Sheldon
+          - button "♡" [ref=e145]
+        - button "T The Four Loves The Four Loves Clive Staples Lewis ♡" [ref=e146] [cursor=pointer]:
+          - generic [ref=e147]:
+            - text: T
+            - generic [ref=e148]: The Four Loves
+          - generic [ref=e149]:
+            - generic [ref=e150]: The Four Loves
+            - generic [ref=e151]: Clive Staples Lewis
+          - button "♡" [ref=e152]
+        - button "T The Problem of Pain The Problem of Pain Clive Staples Lewis ♡" [ref=e153] [cursor=pointer]:
+          - generic [ref=e154]:
+            - text: T
+            - generic [ref=e155]: The Problem of Pain
+          - generic [ref=e156]:
+            - generic [ref=e157]: The Problem of Pain
+            - generic [ref=e158]: Clive Staples Lewis
+          - button "♡" [ref=e159]
+        - button "A An Autobiography An Autobiography Agatha Christie ♡" [ref=e160] [cursor=pointer]:
+          - generic [ref=e161]:
+            - text: A
+            - generic [ref=e162]: An Autobiography
+          - generic [ref=e163]:
+            - generic [ref=e164]: An Autobiography
+            - generic [ref=e165]: Agatha Christie
+          - button "♡" [ref=e166]
+        - button "E Empires of the Monsoon Empires of the Monsoon Richard Hall ♡" [ref=e167] [cursor=pointer]:
+          - generic [ref=e168]:
+            - text: E
+            - generic [ref=e169]: Empires of the Monsoon
+          - generic [ref=e170]:
+            - generic [ref=e171]: Empires of the Monsoon
+            - generic [ref=e172]: Richard Hall
+          - button "♡" [ref=e173]
+        - button "T The Gap Into Madness The Gap Into Madness Stephen R. Donaldson ♡" [ref=e174] [cursor=pointer]:
+          - generic [ref=e175]:
+            - text: T
+            - generic [ref=e176]: The Gap Into Madness
+          - generic [ref=e177]:
+            - generic [ref=e178]: The Gap Into Madness
+            - generic [ref=e179]: Stephen R. Donaldson
+          - button "♡" [ref=e180]
+        - button "M Master of the Game Master of the Game Sidney Sheldon ♡" [ref=e181] [cursor=pointer]:
+          - generic [ref=e182]:
+            - text: M
+            - generic [ref=e183]: Master of the Game
+          - generic [ref=e184]:
+            - generic [ref=e185]: Master of the Game
+            - generic [ref=e186]: Sidney Sheldon
+          - button "♡" [ref=e187]
+        - button "I If Tomorrow Comes If Tomorrow Comes Sidney Sheldon ♡" [ref=e188] [cursor=pointer]:
+          - generic [ref=e189]:
+            - text: I
+            - generic [ref=e190]: If Tomorrow Comes
+          - generic [ref=e191]:
+            - generic [ref=e192]: If Tomorrow Comes
+            - generic [ref=e193]: Sidney Sheldon
+          - button "♡" [ref=e194]
+        - button "A Assassin's Apprentice Assassin's Apprentice Robin Hobb ♡" [ref=e195] [cursor=pointer]:
+          - generic [ref=e196]:
+            - text: A
+            - generic [ref=e197]: Assassin's Apprentice
+          - generic [ref=e198]:
+            - generic [ref=e199]: Assassin's Apprentice
+            - generic [ref=e200]: Robin Hobb
+          - button "♡" [ref=e201]
+      - generic [ref=e202]:
+        - button "← Назад" [disabled] [ref=e203]
+        - generic [ref=e204]: 1–12 из 6556
+        - button "Вперёд →" [ref=e205] [cursor=pointer]

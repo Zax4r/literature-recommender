@@ -1,0 +1,30 @@
+- generic [ref=e2]:
+  - banner [ref=e3]:
+    - heading "📚 Литература" [level=1] [ref=e4]:
+      - generic [ref=e5]: 📚
+      - generic [ref=e6]: Литература
+    - navigation [ref=e7]:
+      - button "Чат" [ref=e109] [cursor=pointer]
+      - button "Лента" [ref=e8] [cursor=pointer]
+      - button "Избранное" [ref=e110] [cursor=pointer]
+      - button "Библиотека" [ref=e111] [cursor=pointer]
+      - button "Рекомендации" [ref=e112] [cursor=pointer]
+    - generic [ref=e113]: claude_tester
+    - button "Выйти" [ref=e114] [cursor=pointer]
+  - main [ref=e206]:
+    - generic [ref=e207]:
+      - complementary [ref=e208]:
+        - button "+ Новый чат" [ref=e209] [cursor=pointer]
+        - list [ref=e210]:
+          - listitem [ref=e229]:
+            - button "Новый чат" [ref=e230] [cursor=pointer]
+            - button "✎" [ref=e231] [cursor=pointer]
+            - button "✕" [ref=e232] [cursor=pointer]
+      - generic [ref=e212]:
+        - generic [ref=e213]:
+          - generic [ref=e233]: Хочу детектив в духе Агаты Кристи с неожиданной развязкой
+          - generic "Помощник печатает" [ref=e236]
+        - generic [ref=e225]:
+          - generic "Прикрепить файл" [ref=e226] [cursor=pointer]: 📎
+          - textbox "Что хотите почитать?" [disabled] [ref=e227]
+          - button "Отправить" [disabled] [ref=e228]

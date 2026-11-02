@@ -1,0 +1,21 @@
+- generic [ref=e2]:
+  - banner [ref=e3]:
+    - heading "📚 Литература" [level=1] [ref=e4]:
+      - generic [ref=e5]: 📚
+      - generic [ref=e6]: Литература
+    - navigation [ref=e7]:
+      - button "Лента" [ref=e8] [cursor=pointer]
+    - button "Войти" [ref=e9] [cursor=pointer]
+    - button "Регистрация" [ref=e10] [cursor=pointer]
+  - main [ref=e11]:
+    - generic [ref=e13]:
+      - generic [aria-hidden] [ref=e14]: 📖
+      - generic [aria-hidden] [ref=e15]: ✨
+      - generic [aria-hidden] [ref=e16]: 🌙
+      - heading [level=2] [ref=e17]:
+        - text: Книга
+        - emphasis [ref=e18]: под настроение
+      - paragraph [ref=e19]: Расскажите помощнику, что хочется почитать, и он подберёт книги и подскажет, где их найти. Все ваши беседы сохраняются.
+      - generic [ref=e20]:
+        - button "Начать бесплатно" [ref=e21] [cursor=pointer]
+        - button "Войти" [ref=e22] [cursor=pointer]
