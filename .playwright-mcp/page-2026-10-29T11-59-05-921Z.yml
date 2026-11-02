@@ -1,0 +1,17 @@
+- generic [ref=e2]:
+  - banner [ref=e3]:
+    - heading "📚 Литература" [level=1] [ref=e4]:
+      - generic [ref=e5]: 📚
+      - generic [ref=e6]: Литература
+    - navigation [ref=e7]:
+      - button "Лента" [ref=e8] [cursor=pointer]
+    - button "Войти" [ref=e9] [cursor=pointer]
+    - button "Регистрация" [active] [ref=e10] [cursor=pointer]
+  - main [ref=e100]:
+    - generic [ref=e101]:
+      - heading "Регистрация" [level=2] [ref=e102]
+      - textbox "Имя пользователя" [ref=e103]
+      - textbox "Email" [ref=e104]
+      - textbox "Пароль" [ref=e105]
+      - button "Создать аккаунт" [ref=e107] [cursor=pointer]
+      - button "Уже есть аккаунт? Войти" [ref=e108] [cursor=pointer]

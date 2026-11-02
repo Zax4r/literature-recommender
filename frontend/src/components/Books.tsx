@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
 import { STATUSES, type Book, type Page, type Status } from "../lib/types";
 import BookCard from "./BookCard";
@@ -8,26 +8,62 @@ const LIMIT = 12;
 const PATHS = { feed: "/books", favorites: "/users/me/favorites", library: "/users/me/library" };
 
 export default function Books({ kind }: { kind: keyof typeof PATHS }) {
-  const [page, setPage] = useState<Page<Book> | null>(null);
-  const [offset, setOffset] = useState(0);
+  const [items, setItems] = useState<Book[]>([]);
+  const [total, setTotal] = useState<number | null>(null);
   const [status, setStatus] = useState<Status | "">("");
   const [message, setMessage] = useState("");
   const [openId, setOpenId] = useState<number | null>(null);
+  const loading = useRef(false);
+  const sentinel = useRef<HTMLDivElement>(null);
 
-  const load = useCallback(async () => {
-    try {
+  const fetchRange = useCallback(
+    (offset: number, limit: number) => {
       const extra = kind === "library" && status ? `&status=${status}` : "";
-      const data = await api<Page<Book>>(`${PATHS[kind]}?offset=${offset}&limit=${LIMIT}${extra}`);
-      setPage(data);
+      return api<Page<Book>>(`${PATHS[kind]}?offset=${offset}&limit=${limit}${extra}`);
+    },
+    [kind, status],
+  );
+
+  const loadMore = useCallback(async () => {
+    if (loading.current) return;
+    loading.current = true;
+    try {
+      const data = await fetchRange(items.length, LIMIT);
+      setItems((prev) => (prev.length === items.length ? [...prev, ...data.items] : prev));
+      setTotal(data.total);
       setMessage("");
     } catch (e) {
       setMessage((e as Error).message);
     }
-  }, [kind, offset, status]);
+    loading.current = false;
+  }, [fetchRange, items.length]);
+
+  // After a change inside a card or dialog, refresh everything already shown.
+  const reload = useCallback(async () => {
+    try {
+      const data = await fetchRange(0, Math.max(items.length, LIMIT));
+      setItems(data.items);
+      setTotal(data.total);
+    } catch (e) {
+      setMessage((e as Error).message);
+    }
+  }, [fetchRange, items.length]);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    setItems([]);
+    setTotal(null);
+  }, [status]);
+
+  const hasMore = total === null || items.length < total;
+  useEffect(() => {
+    const el = sentinel.current;
+    if (!el || !hasMore || message) return;
+    const observer = new IntersectionObserver((entries) => entries[0].isIntersecting && loadMore(), {
+      rootMargin: "400px",
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [hasMore, loadMore, message]);
 
   const empty = {
     feed: "Пока здесь нет книг.",
@@ -39,31 +75,23 @@ export default function Books({ kind }: { kind: keyof typeof PATHS }) {
     <>
       <div className="row">
         {kind === "library" && (
-          <select value={status} onChange={(e) => { setStatus(e.target.value as Status | ""); setOffset(0); }}>
+          <select value={status} onChange={(e) => setStatus(e.target.value as Status | "")}>
             <option value="">Все книги</option>
             {Object.entries(STATUSES).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
           </select>
         )}
       </div>
 
-      <div className="muted">{message || (page && !page.total ? empty : "")}</div>
+      <div className="muted">{message || (total === 0 ? empty : "")}</div>
 
-      {page && (
-        <>
-          <div className="grid">
-            {page.items.map((book, i) => (
-              <BookCard key={book.id} index={i} book={book} onOpen={() => setOpenId(book.id)} onChange={load} />
-            ))}
-          </div>
-          <div className="pager">
-            <button disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - LIMIT))}>← Назад</button>
-            <span className="muted">{page.total ? offset + 1 : 0}–{offset + page.items.length} из {page.total}</span>
-            <button disabled={offset + LIMIT >= page.total} onClick={() => setOffset(offset + LIMIT)}>Вперёд →</button>
-          </div>
-        </>
-      )}
+      <div className="grid">
+        {items.map((book, i) => (
+          <BookCard key={book.id} index={i % LIMIT} book={book} onOpen={() => setOpenId(book.id)} onChange={reload} />
+        ))}
+      </div>
+      {hasMore && <div ref={sentinel} className="more muted">Загрузка…</div>}
 
-      {openId !== null && <BookDialog id={openId} onClose={() => { setOpenId(null); load(); }} />}
+      {openId !== null && <BookDialog id={openId} onClose={() => { setOpenId(null); reload(); }} />}
     </>
   );
 }
