@@ -14,7 +14,7 @@ from typing import Any
 from app.core.config import settings
 from app.services.ai import context
 from app.services.ai.agents import book_shop_agent, extractor, formatter, router_agent
-from app.services.search import qdrant_search
+from app.services.search import db_fallback, qdrant_search
 
 logger = logging.getLogger("orchestrator")
 
@@ -629,13 +629,41 @@ async def run_chat(
         None,
         label="search",
     )
-    if cards is None:
+    search_unavailable = cards is None
+    if search_unavailable:
         cards = await _bounded(
             qdrant_search.dense_fallback(query_text, top_k=settings.SEARCH_TOP_K),
             settings.SEARCH_TIMEOUT_SECONDS,
-            [],
+            None,
             label="search-fallback",
         )
+        search_unavailable = cards is None
+
+    used_db_fallback = False
+    if search_unavailable:
+        # Qdrant — основной поиск, но если он упал, не выдаём «книг нет».
+        logger.warning("Qdrant недоступен; резервный поиск по каталогу в Postgres")
+        cards = await _bounded(
+            db_fallback.search_books(
+                query_text,
+                features=[
+                    *current_genres,
+                    *current_tropes,
+                    *context_genres,
+                    *context_tropes,
+                    *meta["settings"],
+                ],
+                exclude_ids=sorted(exclude_ids),
+                exclude_tropes=meta["exclude"],
+                top_k=settings.SEARCH_TOP_K * OVERFETCH,
+            ),
+            10.0,
+            None,
+            label="search-db-fallback",
+        )
+        search_unavailable = cards is None
+        used_db_fallback = not search_unavailable
+
     raw_cards = cards or []
     if similar:
         # Место действия из книги-образца — мягкий приоритет, а не жёсткий фильтр:
@@ -690,10 +718,13 @@ async def run_chat(
     else:
         cards = []
     logger.info(
-        "chat search: intent=%s follow_up=%s similar=%s query=%r meta=%s -> %d cards",
+        "chat search: intent=%s follow_up=%s similar=%s db_fallback=%s unavailable=%s "
+        "query=%r meta=%s -> %d cards",
         intent,
         follow_up,
         similar,
+        used_db_fallback,
+        search_unavailable,
         query_text[:300],
         meta,
         len(cards),
@@ -701,6 +732,13 @@ async def run_chat(
     mark("search")
 
     if not cards:
+        if search_unavailable:
+            answer = (
+                "Сейчас поиск по каталогу временно недоступен — это не значит, что "
+                "подходящих книг нет. Попробуйте, пожалуйста, ещё раз через минуту."
+            )
+            base.update(_simple("recommend", answer, reason=decision.get("reason", "")))
+            return base
         # В каталоге пусто по запросу — модель отвечает сама, из своих знаний:
         # честно говорит, что подходящих книг нет, и подсказывает известные
         # книги/авторов по теме или как переформулировать запрос.
