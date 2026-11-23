@@ -46,4 +46,8 @@ async def extract_metadata(
         "tropes": clean_string_list(parsed.get("tropes")),
         "settings": clean_string_list(parsed.get("settings"), max_items=8, max_chars=80),
         "exclude": clean_string_list(parsed.get("exclude"), max_items=8, max_chars=80),
+        # Мягкий контекст прошлой темы: помогает ранжировать уточнения
+        # («в космосе» после «похоже на Ведьмака»), но не отсекает книги.
+        "context_genres": clean_string_list(parsed.get("context_genres")),
+        "context_tropes": clean_string_list(parsed.get("context_tropes")),
     }

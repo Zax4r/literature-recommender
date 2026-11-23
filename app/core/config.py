@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL: str = "intfloat/multilingual-e5-base"
     SEARCH_PREFETCH_K: int = 40
     SEARCH_TOP_K: int = 6
+    # Отсекаем «хвост» выдачи со слабым RRF-скором относительно лучшей книги,
+    # чтобы не добивать подборку случайными карточками до шести.
+    SEARCH_MIN_RELATIVE_SCORE: float = 0.3
 
     # --- Whisper (локальный faster-whisper) ---
     WHISPER_MODEL: str = "small"
