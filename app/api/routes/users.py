@@ -5,7 +5,7 @@ from app.api.deps import CurrentUser, DbSession
 from app.api.routes.books import Limit, Offset
 from app.models import Book, Favorite, User, UserBook
 from app.schemas.book import BookPage, Status
-from app.schemas.user import UserMe, UserPublic, UserUpdate
+from app.schemas.user import UserMe, UserPublic, UserStats, UserUpdate
 from app.services.books import to_list_items
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -23,6 +23,36 @@ def update_me(data: UserUpdate, user: CurrentUser, db: DbSession) -> User:
     db.add(user)
     db.commit()
     return user
+
+
+@router.get("/me/stats", response_model=UserStats)
+def read_my_stats(user: CurrentUser, db: DbSession) -> UserStats:
+    """How many books the user has in each status, plus favorites and the average rating."""
+    by_status = {
+        status: count
+        for status, count in db.execute(
+            select(UserBook.status, func.count())
+            .where(UserBook.user_id == user.id)
+            .group_by(UserBook.status)
+        )
+    }
+    rated, average = db.execute(
+        select(func.count(UserBook.rating), func.avg(UserBook.rating)).where(
+            UserBook.user_id == user.id
+        )
+    ).one()
+    favorites = db.scalar(
+        select(func.count()).select_from(Favorite).where(Favorite.user_id == user.id)
+    )
+    return UserStats(
+        read=by_status.get("read", 0),
+        reading=by_status.get("reading", 0),
+        dropped=by_status.get("dropped", 0),
+        planned=by_status.get("planned", 0),
+        favorites=favorites or 0,
+        rated=rated,
+        average_rating=round(float(average), 1) if average is not None else None,
+    )
 
 
 @router.get("/me/favorites", response_model=BookPage)

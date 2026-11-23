@@ -12,6 +12,20 @@ export interface Me {
   username: string;
   email: string;
   is_admin: boolean;
+  display_name: string | null;
+  bio: string | null;
+  avatar: string | null;
+  created_at: string;
+}
+
+export interface UserStats {
+  read: number;
+  reading: number;
+  dropped: number;
+  planned: number;
+  favorites: number;
+  rated: number;
+  average_rating: number | null;
 }
 
 export interface Book {

@@ -8,6 +8,7 @@ interface AuthState {
   login(username: string, password: string): Promise<void>;
   register(email: string, username: string, password: string): Promise<void>;
   logout(): void;
+  updateProfile(changes: Partial<Pick<Me, "display_name" | "bio" | "avatar">>): Promise<void>;
 }
 
 const Ctx = createContext<AuthState>(null!);
@@ -43,6 +44,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       register: async (email, username, password) => {
         await api("/auth/register", { method: "POST", json: { email, username, password } });
         await login(username, password);
+      },
+      updateProfile: async (changes) => {
+        setMe(await api<Me>("/users/me", { method: "PATCH", json: changes }));
       },
       logout: () => {
         setToken(null);

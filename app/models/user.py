@@ -15,5 +15,6 @@ class User(Base):
     hashed_password: Mapped[str] = mapped_column(String(255))
     display_name: Mapped[str | None] = mapped_column(String(64))
     bio: Mapped[str | None] = mapped_column(Text)
+    avatar: Mapped[str | None] = mapped_column(Text)
     is_admin: Mapped[bool] = mapped_column(Boolean, server_default=false())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

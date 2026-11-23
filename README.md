@@ -119,7 +119,8 @@ uv run uvicorn app.main:app --reload
 |---|---|---|---|
 | POST | `/auth/register` | все | `{email, username, password}`, пароль от 8 символов |
 | POST | `/auth/login` | все | форма: `username` (email или логин) и `password`, возвращает JWT |
-| GET / PATCH | `/users/me` | токен | свой профиль (`display_name`, `bio`) |
+| GET / PATCH | `/users/me` | токен | свой профиль (`display_name`, `bio`, `avatar` — картинка в формате data URL до 300 КБ, `null` убирает) |
+| GET | `/users/me/stats` | токен | число книг по статусам, избранное, средняя оценка |
 | GET | `/users/{username}` | все | публичный профиль без email |
 | GET | `/books?offset=&limit=` | все | лента каталога |
 | GET | `/books/{id}` | все | карточка: автор, 250 символов описания, жанры, тропы, теги, `store_url` |
@@ -161,7 +162,7 @@ app/
   api/routes/chat_sessions.py  сессии чата
 frontend/         React-приложение (Vite, nginx в контейнере)
   cli.py          python -m app.cli sync-tags
-alembic/versions/ 0001 (каталог), 0002 (пользователи и админ), 0003 (остальные таблицы), 0004 (сессии чата)
+alembic/versions/ 0001 (каталог), 0002 (пользователи и админ), 0003 (остальные таблицы), 0004 (сессии чата), 0005 (аватар пользователя)
 prompts/          промпты агентов
 scripts/          пайплайн каталога: генерация карточек, загрузка в Postgres и Qdrant
 tests/            pytest

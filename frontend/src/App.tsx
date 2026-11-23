@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 import Auth from "./components/Auth";
+import Avatar from "./components/Avatar";
 import Books from "./components/Books";
 import Chat from "./components/Chat";
 import Hero from "./components/Hero";
+import Profile from "./components/Profile";
 import { useAuth } from "./lib/auth";
 
-type Tab = "chat" | "feed" | "favorites" | "library";
+type Tab = "chat" | "feed" | "favorites" | "library" | "profile";
 const TABS: [Tab, string][] = [
   ["chat", "Чат"],
   ["feed", "Лента"],
@@ -29,6 +31,7 @@ export default function App() {
   let view;
   if (authMode && !me) view = <Auth mode={authMode} onMode={setAuthMode} />;
   else if (tab === "chat" && me) view = <Chat />;
+  else if (tab === "profile" && me) view = <Profile />;
   else {
     const kind = tab === "favorites" || tab === "library" ? tab : "feed";
     view = (
@@ -57,7 +60,13 @@ export default function App() {
         </nav>
         {me ? (
           <>
-            <span className="muted">{me.username}</span>
+            <button
+              className={"ghost profile-link" + (tab === "profile" && !authMode ? " active" : "")}
+              onClick={() => { setTab("profile"); setAuthMode(null); }}
+            >
+              <Avatar name={me.display_name || me.username} src={me.avatar} size={28} />
+              <span>{me.display_name || me.username}</span>
+            </button>
             <button onClick={logout}>Выйти</button>
           </>
         ) : (
