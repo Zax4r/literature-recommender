@@ -14,7 +14,7 @@ from typing import Any
 from app.core.config import settings
 from app.services.ai import context
 from app.services.ai.agents import book_shop_agent, extractor, formatter, router_agent
-from app.services.search import qdrant_search
+from app.services.search import db_fallback, qdrant_search
 
 logger = logging.getLogger("orchestrator")
 
@@ -83,7 +83,106 @@ def last_user_query(history: list | None) -> str:
     return ""
 
 
+# Сообщения, которые сами по себе не содержат темы поиска. Только для них
+# имеет смысл подмешивать тему из истории; «события на Аляске» или «в космосе»
+# — это новый поисковый признак, а не продолжение старой темы.
+_CONTINUATION_ONLY = {
+    "ещё",
+    "еще",
+    "дальше",
+    "продолжи",
+    "продолжай",
+    "а ещё",
+    "а еще",
+    "и ещё",
+    "и еще",
+    "ещё книги",
+    "еще книги",
+    "ещё варианты",
+    "еще варианты",
+    "ещё похожее",
+    "еще похожее",
+    "а ещё похожее",
+    "а еще похожее",
+    "а похожее",
+    "похожее",
+    "аналоги",
+    "аналог",
+    "что ещё",
+    "что еще",
+    "что ещё есть",
+    "что еще есть",
+    "ещё что-нибудь",
+    "еще что-нибудь",
+    "а что ещё есть",
+    "а что еще есть",
+}
+
+
+def _normalize_phrase(text: str | None) -> str:
+    s = re.sub(r"\s+", " ", (text or "").strip().strip(".,!?;:…").lower())
+    return s
+
+
+def is_continuation_only(text: str | None) -> bool:
+    """True, если сообщение — чистое продолжение («ещё», «продолжи») без своей темы."""
+    s = _normalize_phrase(text)
+    return not s or s in _CONTINUATION_ONLY
+
+
+def keep_history_context(
+    *,
+    intent: str,
+    current_genres: list[str],
+    current_tropes: list[str],
+    user_text: str,
+) -> bool:
+    """Нужно ли учитывать тему прошлой темы как мягкий контекст.
+
+    Контекст полезен для коротких уточнений («в космосе» после «похоже на
+    Ведьмака»), но вреден для нового самостоятельного запроса со своим жанром
+    или книгой: иначе «научная фантастика про ИИ» после фэнтези тянула бы магию.
+    """
+    if intent == "follow_up":
+        return True
+    return not (
+        current_genres
+        or current_tropes
+        or is_similarity_request(user_text)
+        or _has_quoted_title(user_text)
+    )
+
+
+def resolve_scope(
+    *,
+    user_text: str,
+    intent: str,
+    router_summary: str | None,
+    history: list | None,
+) -> str:
+    """Текст, по которому ищем книги.
+
+    Для нового запроса — только текущее сообщение. Для продолжения без своей
+    темы — тема из истории + продолжение. Раньше сюда всегда подмешивалась
+    тема из истории, поэтому «события на Аляске» после научной фантастики
+    искались как «космос + Аляска», а слово «похожие» из прошлого запроса
+    отключало все фильтры.
+    """
+    current = (user_text or "").strip()
+    if intent != "follow_up":
+        return current[:2000]
+
+    prior = clean_summary(router_summary) or last_user_query(history)
+    if is_continuation_only(current):
+        return " ".join(p for p in (prior.strip(), current) if p).strip()[:2000]
+    # В сообщении есть свой признак (место, жанр, автор) — он важнее старой темы.
+    return (current or prior).strip()[:2000]
+
+
 OVERFETCH = 5
+# Для «похожего на X», где экстрактор не дал ни жанров, ни тропов, оставляем
+# только книги, близкие к лучшей по скору: иначе в карточки попадает случайный хвост.
+SIMILAR_NO_FEATURES_SCORE_RATIO = 0.6
 
 
 def prefer_genres(cards: list[dict], genres: list[str]) -> list[dict]:
@@ -112,19 +211,17 @@ def _prefix_stem(word: str) -> str:
 
 
 def prefer_settings(cards: list[dict], settings_: list[str]) -> list[dict]:
-    """Поднимает книги, у которых место/время действия из запроса есть в описании.
+    """Поднимает книги, у которых все места/время действия из запроса есть в тексте.
 
     «Место действия» не хранится отдельным полем каталога, но почти всегда
     встречается в описании книги (Аляска, Петербург, космос...). Поиск по
-    префиксу-«стему», чтобы не терять падежные формы."""
+    префиксу-«стему», чтобы не терять падежные формы. Если совпадений нет,
+    список не меняется — окончательное решение принимает гейт релевантности.
+    """
     wanted = [w for w in (_prefix_stem(s) for s in settings_) if w]
     if not wanted:
         return cards
-    matched = [
-        c
-        for c in cards
-        if any(stem in (c.get("description") or "").lower() for stem in wanted)
-    ]
+    matched = [c for c in cards if all(stem in card_text(c) for stem in wanted)]
     return matched or cards
 
 
@@ -140,21 +237,27 @@ def card_text(card: dict) -> str:
     return " ".join(str(f) for f in fields if f).lower()
 
 
-def _wanted_terms(
-    genres: list[str],
-    tropes: list[str],
-    settings_: list[str],
-) -> list[str]:
-    """Признаки запроса одним списком слов/«стемов»: жанры, тропы, места действия."""
-    out: list[str] = []
-    for g in genres or []:
-        if g.strip():
-            out.append(g.strip().lower())
-    for t in tropes or []:
-        if t.strip():
-            out.append(t.strip().lower())
-    out.extend(_prefix_stem(s) for s in (settings_ or []))
-    return [w for w in out if w]
+def card_meta_text(card: dict) -> str:
+    """Метаданные карточки без описания — для проверки жанров и тропов.
+
+    Описание может упомянуть «фэнтези» или «космос» в переносном смысле,
+    поэтому жанр/троп сверяем только с полями каталога.
+    """
+    fields = [
+        card.get("title"),
+        card.get("author"),
+        *(card.get("genres") or []),
+        *(card.get("tropes") or []),
+    ]
+    return " ".join(str(f) for f in fields if f).lower()
+
+
+def _clean_terms(values: list[str] | None) -> list[str]:
+    return [v.strip().lower() for v in (values or []) if v.strip()]
+
+
+def _setting_stems(values: list[str] | None) -> list[str]:
+    return [stem for stem in (_prefix_stem(v) for v in (values or [])) if stem]
 
 
 def relevant_cards(
@@ -164,17 +267,89 @@ def relevant_cards(
     tropes: list[str],
     settings_: list[str],
 ) -> list[dict] | None:
-    """Оставляет только карточки со следами запрошенных признаков.
+    """Оставляет только карточки, где есть запрошенные признаки.
 
-    Гипотеза: Qdrant всегда возвращает top_k карточек даже при полном несовпадении,
-    а форматтер в этом случае вместо честного «ничего не нашлось» начинает
-    повторять запрос. Гейт: если явные признаки были извлечены, но ни одна книга
-    их не содержит — вернуть пустой список (оркестратор ответит честно).
-    None — явных признаков в запросе не было, фильтр не применять."""
-    wanted = _wanted_terms(genres, tropes, settings_)
-    if not wanted:
+    Правила (а не «совпало хоть что-нибудь», как раньше):
+    - каждое место/время действия из запроса должно встречаться в тексте книги;
+    - если запрошен жанр, у книги должен быть этот жанр (тропы помогают
+      ранжировать, но не заменяют жанр);
+    - если жанров нет, достаточно любого запрошенного тропа.
+
+    None — явных признаков в запросе не было, фильтр не применять.
+    Пустой список — признаки были, но ни одна книга им не соответствует;
+    оркестратор честно ответит «ничего не нашлось».
+    """
+    genre_terms = _clean_terms(genres)
+    trope_terms = _clean_terms(tropes)
+    setting_terms = _setting_stems(settings_)
+    if not (genre_terms or trope_terms or setting_terms):
         return None
-    return [c for c in cards if any(w in card_text(c) for w in wanted)]
+
+    def matches(card: dict) -> bool:
+        if setting_terms:
+            text = card_text(card)
+            if not all(term in text for term in setting_terms):
+                return False
+        if genre_terms:
+            meta = card_meta_text(card)
+            if not any(term in meta for term in genre_terms):
+                return False
+        if not genre_terms and trope_terms:
+            meta = card_meta_text(card)
+            if not any(term in meta for term in trope_terms):
+                return False
+        return True
+
+    return [c for c in cards if matches(c)]
+
+
+def trim_weak(cards: list[dict], *, min_relative: float | None = None) -> list[dict]:
+    """Убирает карточки со скором заметно ниже лучшей в подборке.
+
+    Qdrant/RRF всегда отдаёт top_k, поэтому без отсечения в конце подборки
+    оказываются книги, совпавшие только по одному слову. Для «похожего на X»
+    без извлечённых признаков порог можно поднять: иначе в подборку попадают
+    случайные книги из хвоста.
+    """
+    if len(cards) <= 1:
+        return cards
+    ratio = settings.SEARCH_MIN_RELATIVE_SCORE if min_relative is None else min_relative
+    scores = [float(c.get("score") or 0.0) for c in cards]
+    best = max(scores)
+    if best <= 0:
+        return cards
+    cutoff = best * ratio
+    kept = [c for c, score in zip(cards, scores) if score >= cutoff]
+    return kept or cards[:1]
+
+
+def context_hits(card: dict, genres: list[str], tropes: list[str]) -> int:
+    """Сколько мягких признаков прошлой темы есть у книги."""
+    meta = card_meta_text(card)
+    return sum(1 for g in _clean_terms(genres) if g in meta) + sum(
+        1 for t in _clean_terms(tropes) if t in meta
+    )
+
+
+def rank_with_context(
+    cards: list[dict],
+    *,
+    genres: list[str],
+    tropes: list[str],
+) -> list[dict]:
+    """Поднимает книги, совпавшие с прошлой темой, не отсекая остальные.
+
+    Новый запрос («в космосе») остаётся жёстким фильтром, а тема из истории
+    («похоже на Ведьмака») работает как бонус к рангу. Поэтому подборка
+    учитывает контекст, но не превращается в пустой список.
+    """
+    if not genres and not tropes:
+        return cards
+
+    def rank_key(card: dict) -> float:
+        return float(card.get("score") or 0.0) + 0.05 * context_hits(card, genres, tropes)
+
+    return sorted(cards, key=rank_key, reverse=True)
 
 
 _LOCATION_PATTERNS = (
@@ -325,31 +500,63 @@ async def run_chat(
         base.update(_simple(intent, question, question=question))
         return base
 
-    # --- продолжение диалога: ищем по теме из истории + текущему уточнению ---
+    # --- продолжение диалога: старую тему берём только для чистых продолжений ---
     follow_up = intent == "follow_up"
-    if follow_up:
-        prior = clean_summary(decision.get("user_summary")) or last_user_query(history)
-        scope = " ".join(p for p in (prior, user_text or "") if p).strip()[:2000]
-        if not scope:
-            base.update(
-                _simple(
-                    intent,
-                    "Могу продолжить подбор. Опишите направление — жанр, автор, "
-                    "настроение — и я поищу похожие книги.",
-                )
+    scope = resolve_scope(
+        user_text=user_text,
+        intent=intent,
+        router_summary=decision.get("user_summary"),
+        history=history,
+    )
+    if follow_up and not scope:
+        base.update(
+            _simple(
+                intent,
+                "Могу продолжить подбор. Опишите направление — жанр, автор, "
+                "настроение — и я поищу похожие книги.",
             )
-            return base
-    else:
-        scope = user_text
+        )
+        return base
 
     # --- recommend ---
     meta = await _bounded(
         extractor.extract_metadata(scope, untrusted_text, history=dialog),
         settings.AGENT_TIMEOUT_SECONDS,
-        {"genres": [], "tropes": [], "settings": [], "exclude": []},
+        {
+            "genres": [],
+            "tropes": [],
+            "settings": [],
+            "exclude": [],
+            "context_genres": [],
+            "context_tropes": [],
+        },
         label="extractor",
     )
     mark("extractor")
+
+    current_genres = meta["genres"]
+    current_tropes = meta["tropes"]
+    context_genres = meta["context_genres"]
+    context_tropes = meta["context_tropes"]
+
+    # Полностью новый запрос со своим жанром/книгой не должен тянуть контекст
+    # из прошлой темы. Контекст оставляем для коротких уточнений места/времени
+    # («в космосе», «события на Аляске») и чистых продолжений.
+    if not keep_history_context(
+        intent=intent,
+        current_genres=current_genres,
+        current_tropes=current_tropes,
+        user_text=user_text,
+    ):
+        context_genres, context_tropes = [], []
+
+    # Чистое продолжение: текущих признаков нет, но тема в истории есть.
+    # В этом случае контекст становится основным, иначе поиск будет случайным.
+    if not (current_genres or current_tropes or meta["settings"]) and (
+        context_genres or context_tropes
+    ):
+        current_genres, current_tropes = context_genres, context_tropes
+        context_genres, context_tropes = [], []
 
     # Страховка: место действия вида «действия/события происходят на …» вытаскиваем
     # и без LLM-экстрактора, если он вернул пустой settings (короткое типизированное
@@ -372,20 +579,26 @@ async def run_chat(
         )
     summary = summary[:300]
 
+    # Форматтеру говорим и о текущем запросе, и о мягком контексте прошлой темы.
+    context_label = ", ".join([*context_genres, *context_tropes])
+    formatter_summary = summary
+    if context_label:
+        formatter_summary = f"{summary}. Учитывай предыдущую тему: {context_label}"[:300]
+
     # В поиск отдаём формулировку пользователя (или продолжение), а не пересказ роутера:
     # он точнее и не содержит шумовых преамбул.
     query_base = scope if (user_text or follow_up) else summary or untrusted_text or scope
 
-    # «Похожее на книгу X»: совпадение смысловое, а не по словам, поэтому
-    # гейт и фильтры по жанрам/местам не применяем и жанры/места не подмешиваем
-    # в поисковый запрос — ищем по самой формулировке.
+    # «Похожее на книгу X»: смысловое совпадение, но извлечённые жанры/тропы
+    # всё равно помогают отсечь случайные книги. Раньше здесь отключались все
+    # фильтры, и на «книгу похожую на Ведьмака» приходили справочники по стилю.
     similar = is_similarity_request(query_base) or is_similarity_request(user_text)
-    if similar:
-        query_text = (query_base or "").strip()[:500]
-    else:
-        query_text = build_search_query(
-            query_base.strip(), meta["genres"], meta["tropes"], meta["settings"]
-        ).strip()
+    query_text = build_search_query(
+        (query_base or "").strip()[:700 if similar else 2000],
+        [*current_genres, *context_genres],
+        [*current_tropes, *context_tropes],
+        meta["settings"],
+    ).strip()
 
     if not query_text:
         base.update(
@@ -416,48 +629,124 @@ async def run_chat(
         None,
         label="search",
     )
-    if cards is None:
+    search_unavailable = cards is None
+    if search_unavailable:
         cards = await _bounded(
             qdrant_search.dense_fallback(query_text, top_k=settings.SEARCH_TOP_K),
             settings.SEARCH_TIMEOUT_SECONDS,
-            [],
+            None,
             label="search-fallback",
         )
+        search_unavailable = cards is None
+
+    used_db_fallback = False
+    if search_unavailable:
+        # Qdrant — основной поиск, но если он упал, не выдаём «книг нет».
+        logger.warning("Qdrant недоступен; резервный поиск по каталогу в Postgres")
+        cards = await _bounded(
+            db_fallback.search_books(
+                query_text,
+                features=[
+                    *current_genres,
+                    *current_tropes,
+                    *context_genres,
+                    *context_tropes,
+                    *meta["settings"],
+                ],
+                exclude_ids=sorted(exclude_ids),
+                exclude_tropes=meta["exclude"],
+                top_k=settings.SEARCH_TOP_K * OVERFETCH,
+            ),
+            10.0,
+            None,
+            label="search-db-fallback",
+        )
+        search_unavailable = cards is None
+        used_db_fallback = not search_unavailable
+
+    raw_cards = cards or []
     if similar:
-        # Не фильтруем литературными совпадениями: у подобных книг жанры/места
-        # могут не совпадать дословно с запросом. Отдаём топ поиска.
-        cards = (cards or [])[: settings.SEARCH_TOP_K]
+        # Место действия из книги-образца — мягкий приоритет, а не жёсткий фильтр:
+        # у «похожих» книг оно может быть другим. Жанры/тропы при этом проверяем.
+        candidates = prefer_genres(prefer_settings(raw_cards, meta["settings"]), current_genres)
+        checked = relevant_cards(
+            candidates,
+            genres=current_genres,
+            tropes=[] if current_genres else current_tropes,
+            settings_=[],
+        )
     else:
-        cards = prefer_settings(
-            prefer_genres(cards or [], meta["genres"]), meta["settings"]
+        candidates = prefer_settings(
+            prefer_genres(raw_cards, current_genres), meta["settings"]
         )
         checked = relevant_cards(
-            cards, genres=meta["genres"], tropes=meta["tropes"], settings_=meta["settings"]
+            candidates,
+            genres=current_genres,
+            tropes=current_tropes,
+            settings_=meta["settings"],
         )
-        if checked is None:
-            # Явных признаков экстрактор не нашёл — фильтровать нечем.
-            cards = cards[: settings.SEARCH_TOP_K]
-        elif checked:
-            cards = checked[: settings.SEARCH_TOP_K]
-        else:
-            # Признаки запроса были (жанр, место действия...), но ни одна книга каталога
-            # их не содержит. Не кормим форматтер нерелевантными карточками — честно говорим.
-            logger.info(
-                "no relevant cards for features: %s",
-                _wanted_terms(meta["genres"], meta["tropes"], meta["settings"]),
-            )
-            cards = []
+
+    limited_ratio: float | None = None
+    if checked is None:
+        # Явных признаков экстрактор не нашёл — фильтровать нечем.
+        selected = candidates
+        if similar:
+            limited_ratio = SIMILAR_NO_FEATURES_SCORE_RATIO
+    elif checked:
+        selected = checked
+    else:
+        # Признаки запроса были (жанр, место действия...), но ни одна книга каталога
+        # им не соответствует. Не кормим форматтер нерелевантными карточками.
+        logger.info(
+            "no relevant cards for features: genres=%s tropes=%s settings=%s (similar=%s)",
+            current_genres,
+            current_tropes,
+            meta["settings"],
+            similar,
+        )
+        selected = []
+
+    if selected:
+        # Контекст прошлой темы — мягкий буст: книги, совпавшие с ним, идут выше,
+        # но жёсткий фильтр по новому запросу уже применён выше.
+        selected = rank_with_context(
+            selected,
+            genres=context_genres,
+            tropes=[*current_tropes, *context_tropes],
+        )
+        cards = trim_weak(selected, min_relative=limited_ratio)[: settings.SEARCH_TOP_K]
+    else:
+        cards = []
+    logger.info(
+        "chat search: intent=%s follow_up=%s similar=%s db_fallback=%s unavailable=%s "
+        "query=%r meta=%s -> %d cards",
+        intent,
+        follow_up,
+        similar,
+        used_db_fallback,
+        search_unavailable,
+        query_text[:300],
+        meta,
+        len(cards),
+    )
     mark("search")
 
     if not cards:
+        if search_unavailable:
+            answer = (
+                "Сейчас поиск по каталогу временно недоступен — это не значит, что "
+                "подходящих книг нет. Попробуйте, пожалуйста, ещё раз через минуту."
+            )
+            base.update(_simple("recommend", answer, reason=decision.get("reason", "")))
+            return base
         # В каталоге пусто по запросу — модель отвечает сама, из своих знаний:
         # честно говорит, что подходящих книг нет, и подсказывает известные
         # книги/авторов по теме или как переформулировать запрос.
         answer = await _bounded(
             formatter.compose_no_match(
-                summary,
-                matched_genres=meta["genres"],
-                matched_tropes=meta["tropes"],
+                formatter_summary,
+                matched_genres=[*current_genres, *context_genres],
+                matched_tropes=[*current_tropes, *context_tropes],
                 matched_settings=meta["settings"],
             ),
             settings.AGENT_TIMEOUT_SECONDS,
@@ -473,9 +762,9 @@ async def run_chat(
         formatter.compose_answer(
             cards,
             {},
-            summary,
-            matched_genres=meta["genres"],
-            matched_tropes=meta["tropes"],
+            formatter_summary,
+            matched_genres=current_genres,
+            matched_tropes=current_tropes,
             matched_settings=meta["settings"],
         )
     )
@@ -520,9 +809,11 @@ async def run_chat(
             "answer": answer,
             "recommendations": recommendations,
             "matched": {
-                "genres": meta["genres"],
-                "tropes": meta["tropes"],
+                "genres": current_genres,
+                "tropes": current_tropes,
                 "settings": meta["settings"],
+                "context_genres": context_genres,
+                "context_tropes": context_tropes,
                 "exclude": meta["exclude"],
             },
             "reason": decision.get("reason", ""),
