@@ -75,9 +75,9 @@ Qdrant, создание тегов; первый запуск около 7 ми
 ## Данные
 
 Миграции в `alembic/versions/` (0001 каталог, 0002 пользователи и админ, 0003 пользовательские данные, 0004 сессии
-чата). Таблицы:
+чата, 0005 аватар). Таблицы:
 
-- `users` (email, username, пароль в виде хэша, display_name, bio, is_admin).
+- `users` (email, username, пароль в виде хэша, display_name, bio, avatar, is_admin). Аватар хранится картинкой в формате data URL (фронтенд обрезает её до 256×256).
 - `books` (`id`, `source_idx` уникальный и общий с Qdrant, title, author, description, `genres[]`, `tropes[]`).
 - `tags`, `book_tags` (вес, равен позиции в карточке, 0 для пользовательских тегов), `tag_votes` (значение +1/-1,
   первичный ключ `(user_id, book_id, tag_id)`).
